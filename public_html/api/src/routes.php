@@ -3,6 +3,8 @@
 use GuzzleHttp\Client;
 use GuzzleHttp\Exception\RequestException;
 
+echo "🚀 routes.php loaded\n";
+
 $dotenv = Dotenv\Dotenv::createImmutable(__DIR__);
 $dotenv->load();
 
@@ -1331,3 +1333,924 @@ $app->get('/products/{id}/with-formula', function ($request, $response, $args) u
 });
 
 echo "✅ Rutas de productos y fórmulas cargadas exitosamente\n";
+
+// =========================================
+// FUNCIONES DE VALIDACIÓN PARA ÓRDENES DE TRABAJO
+// =========================================
+
+// Función helper para validar datos de orden de trabajo
+function validateWorkOrderData($data) {
+    $errors = [];
+
+    echo "🔍 Validando datos de OT: " . print_r($data, true) . "\n";
+
+    if (empty($data['description']) && empty($data['notes'])) {
+        $errors[] = 'Se requiere descripción o notas para la orden de trabajo';
+        echo "❌ Error: descripción y notas vacías\n";
+    } else {
+        echo "✅ Descripción o notas válidas\n";
+    }
+
+    if (empty($data['priority']) || !in_array($data['priority'], ['low', 'normal', 'high', 'urgent'])) {
+        $errors[] = 'La prioridad debe ser: low, normal, high o urgent';
+        echo "❌ Error: prioridad inválida - valor: " . ($data['priority'] ?? 'no definido') . "\n";
+    } else {
+        echo "✅ Prioridad válida: {$data['priority']}\n";
+    }
+
+    if (!empty($data['planned_start_date']) && !strtotime($data['planned_start_date'])) {
+        $errors[] = 'La fecha de inicio planificada no es válida';
+        echo "❌ Error: fecha inicio inválida - valor: {$data['planned_start_date']}\n";
+    } else {
+        echo "✅ Fecha inicio válida: " . ($data['planned_start_date'] ?? 'no definida') . "\n";
+    }
+
+    if (!empty($data['planned_end_date']) && !strtotime($data['planned_end_date'])) {
+        $errors[] = 'La fecha de fin planificada no es válida';
+        echo "❌ Error: fecha fin inválida - valor: {$data['planned_end_date']}\n";
+    } else {
+        echo "✅ Fecha fin válida: " . ($data['planned_end_date'] ?? 'no definida') . "\n";
+    }
+
+    if (!empty($data['planned_start_date']) && !empty($data['planned_end_date'])) {
+        if (strtotime($data['planned_start_date']) > strtotime($data['planned_end_date'])) {
+            $errors[] = 'La fecha de inicio no puede ser posterior a la fecha de fin';
+            echo "❌ Error: fecha inicio posterior a fecha fin\n";
+        } else {
+            echo "✅ Fechas en orden correcto\n";
+        }
+    }
+
+    echo "🎯 Errores de validación: " . count($errors) . "\n";
+    if (!empty($errors)) {
+        echo "❌ Errores encontrados: " . implode(', ', $errors) . "\n";
+    }
+
+    return ['errors' => $errors, 'data' => $data];
+}
+
+// Función helper para validar item de orden de trabajo
+function validateWorkOrderItemData($data) {
+    $errors = [];
+
+    if (empty($data['product_id'])) {
+        $errors[] = 'El producto es requerido';
+    } elseif (!preg_match('/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i', $data['product_id'])) {
+        $errors[] = 'El ID del producto debe ser un UUID válido';
+    }
+
+    if (!isset($data['planned_quantity']) || !is_numeric($data['planned_quantity']) || $data['planned_quantity'] <= 0) {
+        $errors[] = 'La cantidad planificada debe ser un número positivo';
+    }
+
+    return ['errors' => $errors, 'data' => $data];
+}
+
+// =========================================
+// RUTAS PARA ÓRDENES DE TRABAJO
+// =========================================
+
+// GET /api/work-orders - Listar órdenes de trabajo
+$app->get('/work-orders', function ($request, $response, $args) use ($supabase_client) {
+    try {
+        $params = $request->getQueryParams();
+        $status = $params['status'] ?? null;
+        $limit = $params['limit'] ?? 100;
+
+        echo "📊 Petición GET /work-orders\n";
+
+        $query = 'select=id,order_number,description,status,priority,planned_start_date,planned_end_date,actual_start_date,actual_end_date,notes,created_by,created_at,updated_at&order=created_at.desc&limit=' . $limit;
+
+        if ($status && in_array($status, ['pending', 'in_progress', 'completed', 'cancelled'])) {
+            $query .= "&status=eq.{$status}";
+        }
+
+        $api_response = $supabase_client->get("work_orders?" . $query);
+        $work_orders = json_decode($api_response->getBody(), true);
+
+        echo "Work orders encontrados: " . count($work_orders) . "\n";
+
+        $data = [
+            'success' => true,
+            'data' => $work_orders,
+            'count' => count($work_orders)
+        ];
+
+        return $response->withJson($data);
+
+    } catch (RequestException $e) {
+        $data = [
+            'success' => false,
+            'message' => 'Error al obtener órdenes de trabajo',
+            'error' => $e->getMessage()
+        ];
+        return $response->withJson($data, 500);
+    }
+});
+
+// GET /api/work-orders/{id} - Obtener orden de trabajo por ID
+$app->get('/work-orders/{id}', function ($request, $response, $args) use ($supabase_client) {
+    try {
+        $id = $args['id'];
+
+        echo "📊 Obteniendo OT por ID: {$id}\n";
+
+        $api_response = $supabase_client->get("work_orders?id=eq.{$id}");
+        $work_orders = json_decode($api_response->getBody(), true);
+
+        if (empty($work_orders)) {
+            $data = [
+                'success' => false,
+                'message' => 'Orden de trabajo no encontrada'
+            ];
+            return $response->withJson($data, 404);
+        }
+
+        $data = [
+            'success' => true,
+            'data' => $work_orders[0]
+        ];
+
+        return $response->withJson($data);
+
+    } catch (RequestException $e) {
+        $data = [
+            'success' => false,
+            'message' => 'Error al obtener orden de trabajo',
+            'error' => $e->getMessage()
+        ];
+        return $response->withJson($data, 500);
+    }
+});
+
+// GET /api/work-orders/{id}/details - Obtener orden de trabajo completa con productos y fórmulas
+$app->get('/work-orders/{id}/details', function ($request, $response, $args) use ($supabase_client) {
+    try {
+        $work_order_id = $args['id'];
+
+        echo "📊 [DEBUG] Obteniendo detalles completos de OT: {$work_order_id}\n";
+
+        // Usar la función SQL para obtener detalles completos
+        $query = "select * from get_work_order_details('{$work_order_id}')";
+        echo "📊 [DEBUG] Query SQL: {$query}\n";
+
+        $api_response = $supabase_client->post('rpc/exec', [
+            'json' => ['query' => $query]
+        ]);
+
+        $result = json_decode($api_response->getBody(), true);
+        echo "📊 [DEBUG] Resultado de Supabase: " . print_r($result, true) . "\n";
+
+        if (empty($result)) {
+            echo "❌ [DEBUG] No se encontraron resultados para OT {$work_order_id}\n";
+            $data = [
+                'success' => false,
+                'message' => 'Orden de trabajo no encontrada o sin detalles'
+            ];
+            return $response->withJson($data, 404);
+        }
+
+        echo "✅ [DEBUG] Se encontraron " . count($result) . " filas de resultado\n";
+
+        // Organizar los datos por producto
+        $work_order_details = null;
+        $products = [];
+
+        foreach ($result as $index => $row) {
+            echo "📊 [DEBUG] Procesando fila {$index}: " . print_r($row, true) . "\n";
+
+            if (!$work_order_details) {
+                // Ensure dates are properly formatted as strings
+                $formatDate = function($date, $fieldName) {
+                    echo "📊 [DEBUG] Formateando fecha {$fieldName}: " . print_r($date, true) . " (tipo: " . gettype($date) . ")\n";
+
+                    if (!$date) {
+                        echo "📊 [DEBUG] Fecha {$fieldName} es null/vacía\n";
+                        return null;
+                    }
+
+                    if ($date instanceof DateTime) {
+                        $formatted = $date->format('Y-m-d');
+                        echo "📊 [DEBUG] Fecha {$fieldName} es DateTime, formateada a: {$formatted}\n";
+                        return $formatted;
+                    }
+
+                    // If it's already a string in YYYY-MM-DD format, return as-is
+                    if (is_string($date) && preg_match('/^\d{4}-\d{2}-\d{2}$/', $date)) {
+                        echo "📊 [DEBUG] Fecha {$fieldName} ya está en formato YYYY-MM-DD: {$date}\n";
+                        return $date;
+                    }
+
+                    // Try to parse and format other date formats
+                    try {
+                        echo "📊 [DEBUG] Intentando parsear fecha {$fieldName} como string: {$date}\n";
+                        $dateTime = new DateTime($date);
+                        $formatted = $dateTime->format('Y-m-d');
+                        echo "📊 [DEBUG] Fecha {$fieldName} parseada exitosamente a: {$formatted}\n";
+                        return $formatted;
+                    } catch (Exception $e) {
+                        echo "❌ [DEBUG] Error parseando fecha {$fieldName}: {$date} - Error: " . $e->getMessage() . "\n";
+                        return null;
+                    }
+                };
+
+                $work_order_details = [
+                    'id' => $row['work_order_id'],
+                    'order_number' => $row['order_number'],
+                    'description' => $row['work_order_description'],
+                    'status' => $row['work_order_status'],
+                    'priority' => $row['work_order_priority'],
+                    'planned_start_date' => $formatDate($row['planned_start_date'], 'planned_start_date'),
+                    'planned_end_date' => $formatDate($row['planned_end_date'], 'planned_end_date'),
+                    'actual_start_date' => $formatDate($row['actual_start_date'], 'actual_start_date'),
+                    'actual_end_date' => $formatDate($row['actual_end_date'], 'actual_end_date'),
+                    'created_at' => $row['work_order_created_at'],
+                    'items' => []
+                ];
+
+                echo "📊 [DEBUG] Work order details creados: " . print_r($work_order_details, true) . "\n";
+            }
+
+            $product_key = $row['product_id'];
+            if (!isset($products[$product_key])) {
+                $products[$product_key] = [
+                    'id' => $row['item_id'],
+                    'product_id' => $row['product_id'],
+                    'product_name' => $row['product_name'],
+                    'product_unit' => $row['product_unit'],
+                    'planned_quantity' => $row['planned_quantity'],
+                    'produced_quantity' => $row['produced_quantity'],
+                    'status' => $row['item_status'],
+                    'formula' => []
+                ];
+            }
+
+            if ($row['formula_raw_material_id']) {
+                $products[$product_key]['formula'][] = [
+                    'raw_material_id' => $row['formula_raw_material_id'],
+                    'raw_material_name' => $row['raw_material_name'],
+                    'raw_material_unit' => $row['raw_material_unit'],
+                    'raw_material_current_stock' => $row['raw_material_current_stock'],
+                    'quantity' => $row['formula_quantity'],
+                    'planned_consumption' => $row['consumption_planned'],
+                    'actual_consumption' => $row['consumption_actual']
+                ];
+            }
+        }
+
+        $work_order_details['items'] = array_values($products);
+
+        $data = [
+            'success' => true,
+            'data' => $work_order_details
+        ];
+
+        return $response->withJson($data);
+
+    } catch (RequestException $e) {
+        $data = [
+            'success' => false,
+            'message' => 'Error al obtener detalles de orden de trabajo',
+            'error' => $e->getMessage()
+        ];
+        return $response->withJson($data, 500);
+    }
+});
+
+// POST /api/work-orders - Crear nueva orden de trabajo
+$app->post('/work-orders', function ($request, $response, $args) use ($supabase_client) {
+    try {
+        $input_data = json_decode($request->getBody()->getContents(), true);
+
+        echo "📊 Creando nueva OT\n";
+
+        // Validar datos básicos de la OT
+        $validation = validateWorkOrderData($input_data);
+        if (!empty($validation['errors'])) {
+            $data = [
+                'success' => false,
+                'message' => 'Datos inválidos',
+                'errors' => $validation['errors']
+            ];
+            return $response->withJson($data, 400);
+        }
+
+        // Generar número de orden
+        $order_number_query = "select generate_work_order_number() as order_number";
+        $order_number_response = $supabase_client->post('rpc/exec', [
+            'json' => ['query' => $order_number_query]
+        ]);
+        $order_number_result = json_decode($order_number_response->getBody(), true);
+        $order_number = $order_number_result[0]['order_number'] ?? 'OT-' . date('Y') . '-0001';
+
+        // Crear la orden de trabajo
+        $work_order_data = [
+            'order_number' => $order_number,
+            'description' => $validation['data']['description'] ?? null,
+            'priority' => $validation['data']['priority'],
+            'planned_start_date' => $validation['data']['planned_start_date'] ?? null,
+            'planned_end_date' => $validation['data']['planned_end_date'] ?? null,
+            'notes' => $validation['data']['notes'] ?? null,
+            'created_by' => $validation['data']['created_by'] ?? 'Sistema'
+        ];
+
+        $api_response = $supabase_client->post('work_orders', [
+            'json' => $work_order_data
+        ]);
+
+        $created_work_order = json_decode($api_response->getBody(), true);
+        $work_order_id = $created_work_order[0]['id'];
+
+        // Procesar items de la orden (productos a producir)
+        $items = $input_data['items'] ?? [];
+        $created_items = [];
+        $availability_warnings = [];
+
+        foreach ($items as $item_data) {
+            $item_validation = validateWorkOrderItemData($item_data);
+            if (!empty($item_validation['errors'])) {
+                // Si hay errores en un item, continuar con los demás pero registrar el error
+                $availability_warnings[] = 'Error en producto: ' . implode(', ', $item_validation['errors']);
+                continue;
+            }
+
+            // Verificar que el producto existe y está activo
+            $product_check = $supabase_client->get("products?id=eq.{$item_validation['data']['product_id']}&is_active=eq.true");
+            $product_data = json_decode($product_check->getBody(), true);
+
+            if (empty($product_data)) {
+                $availability_warnings[] = 'Producto no encontrado o inactivo';
+                continue;
+            }
+
+            $product = $product_data[0];
+
+            // Crear item de la orden de trabajo
+            $work_order_item_data = [
+                'work_order_id' => $work_order_id,
+                'product_id' => $product['id'],
+                'planned_quantity' => $item_validation['data']['planned_quantity'],
+                'unit' => $product['unit']
+            ];
+
+            $item_response = $supabase_client->post('work_order_items', [
+                'json' => $work_order_item_data
+            ]);
+
+            $created_item = json_decode($item_response->getBody(), true);
+            $work_order_item_id = $created_item[0]['id'];
+
+            // Calcular y crear consumo planificado de materias primas
+            $consumption_query = "select * from calculate_planned_consumption('{$product['id']}', {$item_validation['data']['planned_quantity']})";
+            $consumption_response = $supabase_client->post('rpc/exec', [
+                'json' => ['query' => $consumption_query]
+            ]);
+
+            $consumptions = json_decode($consumption_response->getBody(), true);
+
+            foreach ($consumptions as $consumption) {
+                $consumption_data = [
+                    'work_order_item_id' => $work_order_item_id,
+                    'raw_material_id' => $consumption['raw_material_id'],
+                    'planned_consumption' => $consumption['consumption_quantity'],
+                    'unit' => $consumption['unit']
+                ];
+
+                $supabase_client->post('work_order_consumption', [
+                    'json' => $consumption_data
+                ]);
+            }
+
+            $created_items[] = $created_item[0];
+        }
+
+        // Verificar disponibilidad de materias primas
+        $availability_query = "select * from check_raw_materials_availability('{$work_order_id}')";
+        $availability_response = $supabase_client->post('rpc/exec', [
+            'json' => ['query' => $availability_query]
+        ]);
+
+        $availability_data = json_decode($availability_response->getBody(), true);
+
+        foreach ($availability_data as $availability) {
+            if (!$availability['is_available']) {
+                $shortage = $availability['shortage_quantity'];
+                $unit = $availability['raw_material_name'];
+                $availability_warnings[] = "Insuficiente {$availability['raw_material_name']}: faltan {$shortage} {$unit}";
+            }
+        }
+
+        $data = [
+            'success' => true,
+            'message' => 'Orden de trabajo creada exitosamente',
+            'data' => [
+                'work_order' => $created_work_order[0],
+                'items' => $created_items,
+                'warnings' => $availability_warnings
+            ]
+        ];
+
+        if (!empty($availability_warnings)) {
+            $data['message'] .= ' (con advertencias de disponibilidad)';
+        }
+
+        echo "✅ OT creada: {$order_number}\n";
+        return $response->withJson($data, 201);
+
+    } catch (RequestException $e) {
+        $data = [
+            'success' => false,
+            'message' => 'Error al crear orden de trabajo',
+            'error' => $e->getMessage()
+        ];
+        return $response->withJson($data, 500);
+    }
+});
+
+// PUT /api/work-orders/{id} - Actualizar orden de trabajo
+$app->put('/work-orders/{id}', function ($request, $response, $args) use ($supabase_client) {
+    echo "🚀 PUT route reached for work order: {$args['id']}\n";
+    try {
+        $id = $args['id'];
+        $raw_body = $request->getBody()->getContents();
+        echo "📊 Raw request body: {$raw_body}\n";
+
+        $input_data = json_decode($raw_body, true);
+        if (json_last_error() !== JSON_ERROR_NONE) {
+            echo "❌ JSON decode error: " . json_last_error_msg() . "\n";
+            $data = [
+                'success' => false,
+                'message' => 'JSON inválido: ' . json_last_error_msg(),
+                'error' => 'JSON_DECODE_ERROR'
+            ];
+            return $response->withJson($data, 400);
+        }
+
+        echo "📊 Parsed input data: " . print_r($input_data, true) . "\n";
+        echo "📊 Actualizando OT ID: {$id}\n";
+
+        // Validar datos básicos de la OT
+        $validation = validateWorkOrderData($input_data);
+        if (!empty($validation['errors'])) {
+            $data = [
+                'success' => false,
+                'message' => 'Datos inválidos',
+                'errors' => $validation['errors']
+            ];
+            return $response->withJson($data, 400);
+        }
+
+        // Verificar que la OT existe
+        $check_response = $supabase_client->get("work_orders?id=eq.{$id}");
+        $check_data = json_decode($check_response->getBody(), true);
+
+        if (empty($check_data)) {
+            $data = [
+                'success' => false,
+                'message' => 'Orden de trabajo no encontrada'
+            ];
+            return $response->withJson($data, 404);
+        }
+
+        $dataToUpdate = [
+            'description' => $validation['data']['description'] ?? null,
+            'priority' => $validation['data']['priority'],
+            'planned_start_date' => $validation['data']['planned_start_date'] ?? null,
+            'planned_end_date' => $validation['data']['planned_end_date'] ?? null,
+            'notes' => $validation['data']['notes'] ?? null,
+            'updated_at' => date('Y-m-d\TH:i:s\Z')
+        ];
+
+        $api_response = $supabase_client->patch("work_orders?id=eq.{$id}", [
+            'json' => $dataToUpdate
+        ]);
+
+        $updated_work_order = json_decode($api_response->getBody(), true);
+
+        // Procesar items si se proporcionaron
+        if (isset($input_data['items']) && is_array($input_data['items'])) {
+            echo "📊 Actualizando items de la OT...\n";
+
+            // Obtener items actuales de la OT
+            $current_items_response = $supabase_client->get("work_order_items?work_order_id=eq.{$id}");
+            $current_items = json_decode($current_items_response->getBody(), true);
+
+            $current_item_ids = array_column($current_items, 'id');
+            $updated_product_ids = [];
+
+            foreach ($input_data['items'] as $item_data) {
+                $item_validation = validateWorkOrderItemData($item_data);
+                if (!empty($item_validation['errors'])) {
+                    echo "❌ Error en item: " . implode(', ', $item_validation['errors']) . "\n";
+                    continue;
+                }
+
+                $product_id = $item_validation['data']['product_id'];
+                $planned_quantity = $item_validation['data']['planned_quantity'];
+
+                $updated_product_ids[] = $product_id;
+
+                // Verificar si el item ya existe
+                $existing_item = null;
+                foreach ($current_items as $current_item) {
+                    if ($current_item['product_id'] === $product_id) {
+                        $existing_item = $current_item;
+                        break;
+                    }
+                }
+
+                if ($existing_item) {
+                    // Actualizar item existente
+                    echo "📊 Actualizando item existente para producto {$product_id}\n";
+                    $item_update_data = [
+                        'planned_quantity' => $planned_quantity,
+                        'updated_at' => date('Y-m-d\TH:i:s\Z')
+                    ];
+
+                    $supabase_client->patch("work_order_items?id=eq.{$existing_item['id']}", [
+                        'json' => $item_update_data
+                    ]);
+
+                    // Actualizar consumo planificado
+                    $consumption_query = "select * from calculate_planned_consumption('{$product_id}', {$planned_quantity})";
+                    $consumption_response = $supabase_client->post('rpc/exec', [
+                        'json' => ['query' => $consumption_query]
+                    ]);
+
+                    $consumptions = json_decode($consumption_response->getBody(), true);
+
+                    // Eliminar consumos anteriores para este item
+                    $supabase_client->delete("work_order_consumption?work_order_item_id=eq.{$existing_item['id']}");
+
+                    // Crear nuevos consumos
+                    foreach ($consumptions as $consumption) {
+                        $consumption_data = [
+                            'work_order_item_id' => $existing_item['id'],
+                            'raw_material_id' => $consumption['raw_material_id'],
+                            'planned_consumption' => $consumption['consumption_quantity'],
+                            'unit' => $consumption['unit']
+                        ];
+
+                        $supabase_client->post('work_order_consumption', [
+                            'json' => $consumption_data
+                        ]);
+                    }
+                } else {
+                    // Crear nuevo item
+                    echo "📊 Creando nuevo item para producto {$product_id}\n";
+                    $new_item_data = [
+                        'work_order_id' => $id,
+                        'product_id' => $product_id,
+                        'planned_quantity' => $planned_quantity,
+                        'unit' => 'unidad' // TODO: obtener de producto
+                    ];
+
+                    $item_response = $supabase_client->post('work_order_items', [
+                        'json' => $new_item_data
+                    ]);
+
+                    $created_item = json_decode($item_response->getBody(), true);
+                    $work_order_item_id = $created_item[0]['id'];
+
+                    // Calcular y crear consumo planificado
+                    $consumption_query = "select * from calculate_planned_consumption('{$product_id}', {$planned_quantity})";
+                    $consumption_response = $supabase_client->post('rpc/exec', [
+                        'json' => ['query' => $consumption_query]
+                    ]);
+
+                    $consumptions = json_decode($consumption_response->getBody(), true);
+
+                    foreach ($consumptions as $consumption) {
+                        $consumption_data = [
+                            'work_order_item_id' => $work_order_item_id,
+                            'raw_material_id' => $consumption['raw_material_id'],
+                            'planned_consumption' => $consumption['consumption_quantity'],
+                            'unit' => $consumption['unit']
+                        ];
+
+                        $supabase_client->post('work_order_consumption', [
+                            'json' => $consumption_data
+                        ]);
+                    }
+                }
+            }
+
+            // Eliminar items que ya no están en la lista actualizada
+            foreach ($current_items as $current_item) {
+                if (!in_array($current_item['product_id'], $updated_product_ids)) {
+                    echo "📊 Eliminando item obsoleto {$current_item['id']}\n";
+                    $supabase_client->delete("work_order_items?id=eq.{$current_item['id']}");
+                }
+            }
+        }
+
+        $data = [
+            'success' => true,
+            'message' => 'Orden de trabajo actualizada exitosamente',
+            'data' => $updated_work_order[0]
+        ];
+
+        return $response->withJson($data);
+
+    } catch (RequestException $e) {
+        $data = [
+            'success' => false,
+            'message' => 'Error al actualizar orden de trabajo',
+            'error' => $e->getMessage()
+        ];
+        return $response->withJson($data, 500);
+    }
+});
+
+// PATCH /api/work-orders/{id}/status - Cambiar estado de orden de trabajo
+$app->patch('/work-orders/{id}/status', function ($request, $response, $args) use ($supabase_client) {
+    try {
+        $id = $args['id'];
+        $input_data = json_decode($request->getBody()->getContents(), true);
+        $new_status = $input_data['status'] ?? null;
+
+        if (!$new_status || !in_array($new_status, ['pending', 'in_progress', 'completed', 'cancelled'])) {
+            $data = [
+                'success' => false,
+                'message' => 'Estado inválido. Debe ser: pending, in_progress, completed o cancelled'
+            ];
+            return $response->withJson($data, 400);
+        }
+
+        echo "📊 Cambiando estado de OT {$id} a {$new_status}\n";
+
+        $dataToUpdate = [
+            'status' => $new_status,
+            'updated_at' => date('Y-m-d\TH:i:s\Z')
+        ];
+
+        // Actualizar fechas según el estado
+        if ($new_status === 'in_progress') {
+            $dataToUpdate['actual_start_date'] = date('Y-m-d\TH:i:s\Z');
+        } elseif ($new_status === 'completed') {
+            $dataToUpdate['actual_end_date'] = date('Y-m-d\TH:i:s\Z');
+        }
+
+        // Verificar que la OT existe
+        $check_response = $supabase_client->get("work_orders?id=eq.{$id}");
+        $check_data = json_decode($check_response->getBody(), true);
+
+        if (empty($check_data)) {
+            $data = [
+                'success' => false,
+                'message' => 'Orden de trabajo no encontrada'
+            ];
+            return $response->withJson($data, 404);
+        }
+
+        $api_response = $supabase_client->patch("work_orders?id=eq.{$id}", [
+            'json' => $dataToUpdate
+        ]);
+
+        $updated_work_order = json_decode($api_response->getBody(), true);
+
+        $data = [
+            'success' => true,
+            'message' => 'Estado de orden de trabajo actualizado exitosamente',
+            'data' => $updated_work_order[0]
+        ];
+
+        return $response->withJson($data);
+
+    } catch (RequestException $e) {
+        $data = [
+            'success' => false,
+            'message' => 'Error al cambiar estado de orden de trabajo',
+            'error' => $e->getMessage()
+        ];
+        return $response->withJson($data, 500);
+    }
+});
+
+// PATCH /api/work-orders/{id}/complete - Completar orden de trabajo con deducción de stock
+$app->patch('/work-orders/{id}/complete', function ($request, $response, $args) use ($supabase_client) {
+    try {
+        $id = $args['id'];
+        $input_data = json_decode($request->getBody()->getContents(), true);
+
+        echo "📊 Completando OT ID: {$id} con deducción de stock\n";
+
+        // Verificar que la OT existe
+        $check_response = $supabase_client->get("work_orders?id=eq.{$id}");
+        $check_data = json_decode($check_response->getBody(), true);
+
+        if (empty($check_data)) {
+            $data = [
+                'success' => false,
+                'message' => 'Orden de trabajo no encontrada'
+            ];
+            return $response->withJson($data, 404);
+        }
+
+        $work_order = $check_data[0];
+
+        // Verificar que esté en progreso
+        if ($work_order['status'] !== 'in_progress') {
+            $data = [
+                'success' => false,
+                'message' => 'Solo se pueden completar órdenes de trabajo en progreso'
+            ];
+            return $response->withJson($data, 400);
+        }
+
+        // Obtener items de la OT con consumo planificado
+        $items_response = $supabase_client->get("work_order_items?work_order_id=eq.{$id}&select=id,product_id,planned_quantity,produced_quantity");
+        $items = json_decode($items_response->getBody(), true);
+
+        if (empty($items)) {
+            $data = [
+                'success' => false,
+                'message' => 'La orden de trabajo no tiene items para completar'
+            ];
+            return $response->withJson($data, 400);
+        }
+
+        $errors = [];
+        $warnings = [];
+
+        // Procesar cada item
+        foreach ($items as $item) {
+            $item_id = $item['id'];
+            $produced_quantity = $input_data['items'][$item_id]['produced_quantity'] ?? $item['planned_quantity'];
+            $consumption_data = $input_data['items'][$item_id]['consumption'] ?? [];
+
+            echo "📊 Procesando item {$item_id}, cantidad producida: {$produced_quantity}\n";
+
+            // Actualizar cantidad producida del item
+            $item_update_data = [
+                'produced_quantity' => $produced_quantity,
+                'status' => 'completed',
+                'updated_at' => date('Y-m-d\TH:i:s\Z')
+            ];
+
+            $supabase_client->patch("work_order_items?id=eq.{$item_id}", [
+                'json' => $item_update_data
+            ]);
+
+            // Procesar consumo de materias primas
+            if (!empty($consumption_data)) {
+                foreach ($consumption_data as $consumption) {
+                    $raw_material_id = $consumption['raw_material_id'];
+                    $actual_consumption = $consumption['actual_consumption'];
+
+                    echo "📊 Registrando consumo: {$raw_material_id} -> {$actual_consumption}\n";
+
+                    // Actualizar consumo real en work_order_consumption
+                    $consumption_update = [
+                        'actual_consumption' => $actual_consumption,
+                        'updated_at' => date('Y-m-d\TH:i:s\Z')
+                    ];
+
+                    $supabase_client->patch("work_order_consumption?work_order_item_id=eq.{$item_id}&raw_material_id=eq.{$raw_material_id}", [
+                        'json' => $consumption_update
+                    ]);
+
+                    // Verificar stock disponible antes de deducir
+                    $stock_response = $supabase_client->get("raw_materials?id=eq.{$raw_material_id}&select=current_stock,name");
+                    $stock_data = json_decode($stock_response->getBody(), true);
+
+                    if (!empty($stock_data)) {
+                        $current_stock = $stock_data[0]['current_stock'];
+                        $material_name = $stock_data[0]['name'];
+
+                        if ($current_stock < $actual_consumption) {
+                            $errors[] = "Stock insuficiente de '{$material_name}'. Disponible: {$current_stock}, requerido: {$actual_consumption}";
+                            continue;
+                        }
+
+                        // Deducir stock
+                        $new_stock = $current_stock - $actual_consumption;
+                        $stock_update = [
+                            'current_stock' => $new_stock,
+                            'updated_at' => date('Y-m-d\TH:i:s\Z')
+                        ];
+
+                        $supabase_client->patch("raw_materials?id=eq.{$raw_material_id}", [
+                            'json' => $stock_update
+                        ]);
+
+                        echo "✅ Stock deducido: {$material_name} -> {$new_stock} (deducido: {$actual_consumption})\n";
+
+                        // Registrar movimiento de salida en inventory_entries
+                        $movement_data = [
+                            'raw_material_id' => $raw_material_id,
+                            'quantity' => $actual_consumption,
+                            'entry_type' => 'out',
+                            'notes' => "Consumo OT {$work_order['order_number']} - {$material_name}",
+                            'movement_date' => date('Y-m-d\TH:i:s\Z')
+                        ];
+
+                        $supabase_client->post('inventory_entries', [
+                            'json' => $movement_data
+                        ]);
+                    }
+                }
+            } else {
+                $warnings[] = "No se proporcionaron datos de consumo para el item {$item_id}";
+            }
+        }
+
+        // Verificar si todos los items están completados
+        $all_completed = true;
+        foreach ($items as $item) {
+            if ($item['status'] !== 'completed') {
+                $all_completed = false;
+                break;
+            }
+        }
+
+        // Si todos los items están completados, marcar la OT como completada
+        if ($all_completed) {
+            $wo_update_data = [
+                'status' => 'completed',
+                'actual_end_date' => date('Y-m-d\TH:i:s\Z'),
+                'updated_at' => date('Y-m-d\TH:i:s\Z')
+            ];
+
+            $supabase_client->patch("work_orders?id=eq.{$id}", [
+                'json' => $wo_update_data
+            ]);
+
+            echo "✅ Orden de trabajo completada exitosamente\n";
+        }
+
+        $data = [
+            'success' => true,
+            'message' => 'Orden de trabajo procesada exitosamente',
+            'data' => [
+                'work_order_id' => $id,
+                'status' => $all_completed ? 'completed' : 'in_progress',
+                'errors' => $errors,
+                'warnings' => $warnings
+            ]
+        ];
+
+        if (!empty($errors)) {
+            $data['message'] .= ' (con errores en deducción de stock)';
+        }
+
+        return $response->withJson($data);
+
+    } catch (RequestException $e) {
+        $data = [
+            'success' => false,
+            'message' => 'Error al completar orden de trabajo',
+            'error' => $e->getMessage()
+        ];
+        return $response->withJson($data, 500);
+    }
+});
+
+// DELETE /api/work-orders/{id} - Eliminar orden de trabajo
+$app->delete('/work-orders/{id}', function ($request, $response, $args) use ($supabase_client) {
+    try {
+        $id = $args['id'];
+
+        echo "📊 Eliminando OT ID: {$id}\n";
+
+        // Verificar que la OT existe
+        $check_response = $supabase_client->get("work_orders?id=eq.{$id}");
+        $check_data = json_decode($check_response->getBody(), true);
+
+        if (empty($check_data)) {
+            $data = [
+                'success' => false,
+                'message' => 'Orden de trabajo no encontrada'
+            ];
+            return $response->withJson($data, 404);
+        }
+
+        // Verificar que no esté en progreso o completada
+        if (in_array($check_data[0]['status'], ['in_progress', 'completed'])) {
+            $data = [
+                'success' => false,
+                'message' => 'No se puede eliminar una orden de trabajo en progreso o completada'
+            ];
+            return $response->withJson($data, 400);
+        }
+
+        $api_response = $supabase_client->delete("work_orders?id=eq.{$id}");
+
+        $data = [
+            'success' => true,
+            'message' => 'Orden de trabajo eliminada exitosamente'
+        ];
+
+        return $response->withJson($data);
+
+    } catch (RequestException $e) {
+        $data = [
+            'success' => false,
+            'message' => 'Error al eliminar orden de trabajo',
+            'error' => $e->getMessage()
+        ];
+        return $response->withJson($data, 500);
+    }
+});
+
+echo "✅ Rutas de órdenes de trabajo cargadas exitosamente\n";

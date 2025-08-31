@@ -5,10 +5,14 @@ import InventoryEntries from './components/InventoryEntries';
 import ProductsList from './components/ProductsList';
 import ProductForm from './components/ProductForm';
 import ProductDetails from './components/ProductDetails';
-import { Product } from './types';
+import WorkOrdersList from './components/WorkOrdersList';
+import WorkOrderForm from './components/WorkOrderForm';
+import WorkOrderDetails from './components/WorkOrderDetails';
+import { Product, WorkOrder } from './types';
+import { deleteWorkOrder } from './services/workOrdersService';
 import './App.css';
 
-type AppSection = 'materials' | 'products';
+type AppSection = 'materials' | 'products' | 'workorders';
 
 function App() {
   // Estado de navegación
@@ -28,6 +32,12 @@ function App() {
   const [viewingProduct, setViewingProduct] = useState<Product | null>(null);
   const [showProductDetails, setShowProductDetails] = useState(false);
   const [forceRefreshProducts, setForceRefreshProducts] = useState(0);
+
+  // Estados para órdenes de trabajo
+  const [showWorkOrderForm, setShowWorkOrderForm] = useState(false);
+  const [viewingWorkOrder, setViewingWorkOrder] = useState<WorkOrder | null>(null);
+  const [editingWorkOrder, setEditingWorkOrder] = useState<WorkOrder | null>(null);
+  const [forceRefreshWorkOrders, setForceRefreshWorkOrders] = useState(0);
 
   // =========================================
   // HANDLERS PARA MATERIAS PRIMAS
@@ -126,6 +136,57 @@ function App() {
     setForceRefreshProducts(prev => prev + 1); // Fuerzar refresco del componente ProductsList
   };
 
+  // =========================================
+  // HANDLERS PARA ÓRDENES DE TRABAJO
+  // =========================================
+
+  const handleCreateWorkOrder = () => {
+    setShowWorkOrderForm(true);
+  };
+
+  const handleViewWorkOrderDetails = (workOrder: WorkOrder) => {
+    setViewingWorkOrder(workOrder);
+    // TODO: Implementar vista de detalles cuando esté lista
+  };
+
+  const handleEditWorkOrder = (workOrder: WorkOrder) => {
+    setEditingWorkOrder(workOrder);
+    setShowWorkOrderForm(true);
+  };
+
+  const handleWorkOrderFormSubmit = () => {
+    // Refrescar la lista después de crear/editar OT
+    refreshWorkOrdersList();
+    console.log('Orden de trabajo actualizada/creada');
+  };
+
+  const handleCloseWorkOrderForm = () => {
+    setShowWorkOrderForm(false);
+    setEditingWorkOrder(null);
+  };
+
+  const handleDeleteWorkOrder = async (workOrder: WorkOrder) => {
+    try {
+      const result = await deleteWorkOrder(workOrder.id);
+      if (result.success) {
+        // Refrescar la lista después de eliminar
+        refreshWorkOrdersList();
+        console.log('Orden de trabajo eliminada exitosamente');
+      } else {
+        alert(`Error al eliminar la orden de trabajo: ${result.message}`);
+      }
+    } catch (error) {
+      console.error('Error eliminando orden de trabajo:', error);
+      alert('Error interno del servidor al eliminar la orden de trabajo');
+    }
+  };
+
+  // Función para refrescar la lista de órdenes de trabajo
+  const refreshWorkOrdersList = () => {
+    console.log('Refrescando lista de órdenes de trabajo...');
+    setForceRefreshWorkOrders(prev => prev + 1);
+  };
+
 
   return (
     <div className="App">
@@ -135,17 +196,23 @@ function App() {
           <div className="header-left">
             <h1>Sistema de Gestión</h1>
             <nav className="main-navigation">
-              <button 
+              <button
                 className={`nav-button ${currentSection === 'materials' ? 'active' : ''}`}
                 onClick={() => setCurrentSection('materials')}
               >
                 📦 Materias Primas
               </button>
-              <button 
+              <button
                 className={`nav-button ${currentSection === 'products' ? 'active' : ''}`}
                 onClick={() => setCurrentSection('products')}
               >
                 🏭 Productos
+              </button>
+              <button
+                className={`nav-button ${currentSection === 'workorders' ? 'active' : ''}`}
+                onClick={() => setCurrentSection('workorders')}
+              >
+                📋 Órdenes de Trabajo
               </button>
             </nav>
           </div>
@@ -158,6 +225,11 @@ function App() {
             {currentSection === 'products' && (
               <button onClick={handleCreateProduct} className="create-button">
                 ➕ Nuevo Producto
+              </button>
+            )}
+            {currentSection === 'workorders' && (
+              <button onClick={handleCreateWorkOrder} className="create-button">
+                ➕ Nueva Orden de Trabajo
               </button>
             )}
           </div>
@@ -182,6 +254,17 @@ function App() {
             onViewDetails={handleViewProductDetails}
             onCreate={handleCreateProduct}
             forceRefresh={forceRefreshProducts}
+          />
+        )}
+
+        {currentSection === 'workorders' && (
+          <WorkOrdersList
+            key={`workorders-${forceRefreshWorkOrders}`}
+            onCreate={handleCreateWorkOrder}
+            onViewDetails={handleViewWorkOrderDetails}
+            onEdit={handleEditWorkOrder}
+            onDelete={handleDeleteWorkOrder}
+            forceRefresh={forceRefreshWorkOrders}
           />
         )}
       </main>
@@ -222,6 +305,24 @@ function App() {
           isOpen={showProductDetails}
           onClose={handleCloseProductDetails}
           onUpdate={handleProductDetailsUpdate}
+        />
+      )}
+
+      {/* Modal para Órdenes de Trabajo */}
+      <WorkOrderForm
+        isOpen={showWorkOrderForm}
+        onClose={handleCloseWorkOrderForm}
+        onSubmit={handleWorkOrderFormSubmit}
+        workOrder={editingWorkOrder}
+      />
+
+      {/* Modal de Detalles de Orden de Trabajo */}
+      {viewingWorkOrder && (
+        <WorkOrderDetails
+          workOrder={viewingWorkOrder}
+          isOpen={!!viewingWorkOrder}
+          onClose={() => setViewingWorkOrder(null)}
+          onUpdate={refreshWorkOrdersList}
         />
       )}
     </div>

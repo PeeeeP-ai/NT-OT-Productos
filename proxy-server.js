@@ -14,7 +14,10 @@ console.log('📍 Puerto:', PORT);
 // 📡 MIDDLEWARE MANUAL PARA CORS (doble capa de protección)
 app.use((req, res, next) => {
   const timestamp = new Date().toISOString();
-  console.log(`📡 [${timestamp}] ${req.method} ${req.originalUrl} - Origen: ${req.headers.origin || 'desconocido'}` );
+  console.log(`📡 [${timestamp}] ${req.method} ${req.originalUrl} - Origen: ${req.headers.origin || 'desconocido'}`);
+  console.log(`📡 [${timestamp}] Headers:`, JSON.stringify(req.headers, null, 2));
+  console.log(`📡 [${timestamp}] Content-Type: ${req.headers['content-type']}`);
+  console.log(`📡 [${timestamp}] Content-Length: ${req.headers['content-length']}`);
 
   // Headers manuales
   res.header('Access-Control-Allow-Origin', '*');
@@ -27,6 +30,30 @@ app.use((req, res, next) => {
     console.log(`✈️ Preflight OPTIONS manejado para ruta: ${req.originalUrl} - Origen: ${req.headers.origin}`);
     res.status(200).send();
     return;
+  }
+
+  next();
+});
+
+// Middleware adicional para logging de requests POST
+app.use((req, res, next) => {
+  if (req.method === 'POST') {
+    console.log(`📝 [${new Date().toISOString()}] POST REQUEST DETECTED: ${req.originalUrl}`);
+    console.log(`📝 [${new Date().toISOString()}] POST Headers:`, JSON.stringify(req.headers, null, 2));
+
+    // Interceptar el body si existe
+    let originalSend = res.send;
+    let originalJson = res.json;
+
+    res.send = function(body) {
+      console.log(`📤 [${new Date().toISOString()}] RESPONSE for ${req.originalUrl}:`, body);
+      return originalSend.call(this, body);
+    };
+
+    res.json = function(body) {
+      console.log(`📤 [${new Date().toISOString()}] JSON RESPONSE for ${req.originalUrl}:`, JSON.stringify(body, null, 2));
+      return originalJson.call(this, body);
+    };
   }
 
   next();
@@ -1005,7 +1032,7 @@ app.get('/products/:id/with-formula', async (req, res) => {
 
     // Obtener producto
     const productResponse = await supabaseClient.get(`products?id=eq.${req.params.id}`);
-    
+
     if (!productResponse.data || productResponse.data.length === 0) {
       return res.status(404).json({ success: false, message: 'Producto no encontrado' });
     }
@@ -1021,7 +1048,7 @@ app.get('/products/:id/with-formula', async (req, res) => {
     // Combinar datos
     const formula = formulaData.map(item => {
       const material = allMaterials.find(m => m.id === item.raw_material_id);
-      
+
       if (material) {
         return {
           id: item.id,
@@ -1052,7 +1079,7 @@ app.get('/products/:id/with-formula', async (req, res) => {
         };
       }
     });
-    
+
     const productWithFormula = {
       ...productResponse.data[0],
       formula: formula
@@ -1082,6 +1109,731 @@ app.get('/products/:id/with-formula', async (req, res) => {
   }
 });
 
+// =========================================
+// RUTAS PARA ÓRDENES DE TRABAJO
+// =========================================
+
+// 📋 GET ÓRDENES DE TRABAJO
+app.get('/work-orders', async (req, res) => {
+  try {
+    console.log('📊 Petición GET /work-orders');
+    console.log('  Query params:', req.query);
+
+    const params = req.query;
+    let query = 'order=created_at.desc&limit=100';
+
+    if (params.status) {
+      query += `&status=eq.${params.status}`;
+    }
+
+    console.log('  Supabase query:', query);
+
+    const response = await supabaseClient.get(`work_orders?${query}`);
+
+    console.log('  Supabase response:', response.data.length, 'órdenes de trabajo encontradas');
+
+    let workOrders = response.data || [];
+
+    res.header('Access-Control-Allow-Origin', '*');
+    res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE, OPTIONS');
+    res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization');
+
+    res.json({
+      success: true,
+      data: Array.isArray(workOrders) ? workOrders : [],
+      count: Array.isArray(workOrders) ? workOrders.length : 0,
+      timestamp: new Date().toISOString(),
+      origin: req.headers.origin || 'none',
+      cors_working: true
+    });
+
+    console.log('  ✅ Respuesta enviada correctamente');
+
+  } catch (error) {
+    console.error('❌ Error obteniendo órdenes de trabajo:', error.message);
+
+    res.header('Access-Control-Allow-Origin', '*');
+    res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE, OPTIONS');
+    res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization');
+
+    res.status(500).json({
+      success: false,
+      message: 'Error obteniendo órdenes de trabajo',
+      error: error.message,
+      type: 'database_error',
+      cors_working: true
+    });
+  }
+});
+
+// 📦 POST ÓRDENES DE TRABAJO
+app.post('/work-orders', async (req, res) => {
+  try {
+    console.log('➕ Creando orden de trabajo');
+    console.log('📊 Headers recibidos:', JSON.stringify(req.headers, null, 2));
+    console.log('📊 Body recibido:', JSON.stringify(req.body, null, 2));
+    console.log('📊 Content-Type:', req.headers['content-type']);
+
+    const { description, priority, planned_start_date, planned_end_date, notes, items } = req.body;
+
+    console.log('📋 Datos parseados:');
+    console.log('  - description:', description);
+    console.log('  - priority:', priority);
+    console.log('  - planned_start_date:', planned_start_date);
+    console.log('  - planned_end_date:', planned_end_date);
+    console.log('  - notes:', notes);
+    console.log('  - items:', JSON.stringify(items, null, 2));
+
+    // Generar número de orden automáticamente
+    console.log('🔢 Generando número de orden...');
+
+    let orderNumber;
+    try {
+      const orderNumberResponse = await supabaseClient.post('rpc/generate_work_order_number');
+      console.log('🔢 Respuesta de generación de número:', JSON.stringify(orderNumberResponse.data, null, 2));
+      orderNumber = orderNumberResponse.data;
+    } catch (rpcError) {
+      console.warn('⚠️ Función RPC no disponible, generando número manualmente:', rpcError.message);
+      // Fallback: generar número basado en timestamp
+      const timestamp = Date.now();
+      const random = Math.floor(Math.random() * 1000);
+      orderNumber = `OT-${new Date().getFullYear()}-${timestamp.toString().slice(-4)}${random.toString().padStart(3, '0')}`;
+    }
+
+    console.log('🔢 Número de orden generado:', orderNumber);
+
+    // Crear la orden de trabajo
+    const workOrderData = {
+      order_number: orderNumber,
+      description: description || null,
+      priority: priority || 'normal',
+      planned_start_date: planned_start_date || null,
+      planned_end_date: planned_end_date || null,
+      notes: notes || null,
+      status: 'pending',
+      created_by: 'Sistema',
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString()
+    };
+
+    console.log('📊 Creando orden de trabajo con datos:', JSON.stringify(workOrderData, null, 2));
+
+    const workOrderResponse = await supabaseClient.post('work_orders', workOrderData);
+
+    console.log('📊 Respuesta completa de Supabase:', {
+      status: workOrderResponse.status,
+      statusText: workOrderResponse.statusText,
+      headers: workOrderResponse.headers,
+      data: workOrderResponse.data
+    });
+    console.log('📊 Respuesta de creación de OT:', JSON.stringify(workOrderResponse.data, null, 2));
+
+    // Supabase sometimes returns empty response body but still creates the record successfully
+    // Check if the request was successful (status 201) rather than checking response data
+    if (workOrderResponse.status !== 201) {
+      console.error('❌ Error en la creación de orden de trabajo. Verificando error...');
+      console.error('❌ Status:', workOrderResponse.status);
+      console.error('❌ StatusText:', workOrderResponse.statusText);
+      console.error('❌ Headers:', workOrderResponse.headers);
+      console.error('❌ Response data:', workOrderResponse.data);
+      throw new Error(`Error al crear orden de trabajo - Status: ${workOrderResponse.status}`);
+    }
+
+    // Since Supabase may return empty response, we need to fetch the created work order
+    // to get the ID. We'll use the order number to find it.
+    console.log('🔍 Buscando orden de trabajo creada...');
+    const searchResponse = await supabaseClient.get(`work_orders?order_number=eq.${orderNumber}`);
+
+    if (!searchResponse.data || searchResponse.data.length === 0) {
+      console.error('❌ No se pudo encontrar la orden de trabajo creada');
+      throw new Error('Orden de trabajo creada pero no encontrada en la base de datos');
+    }
+
+    const workOrderId = searchResponse.data[0].id;
+    console.log('✅ Orden de trabajo encontrada con ID:', workOrderId);
+
+    // Procesar items si existen
+    let createdItems = [];
+    if (items && Array.isArray(items)) {
+      console.log('📦 Procesando', items.length, 'items...');
+
+      for (let i = 0; i < items.length; i++) {
+        const item = items[i];
+        console.log(`📦 Procesando item ${i + 1}/${items.length}:`, JSON.stringify(item, null, 2));
+
+        const itemData = {
+          work_order_id: workOrderId,
+          product_id: item.product_id,
+          planned_quantity: parseFloat(item.planned_quantity),
+          unit: item.unit || 'unidad',
+          status: 'pending',
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString()
+        };
+
+        console.log('📦 Datos del item a crear:', JSON.stringify(itemData, null, 2));
+
+        const itemResponse = await supabaseClient.post('work_order_items', itemData);
+
+        console.log('📦 Respuesta de creación de item:', JSON.stringify(itemResponse.data, null, 2));
+
+        if (itemResponse.data && itemResponse.data.length > 0) {
+          createdItems.push(itemResponse.data[0]);
+
+          // Calcular consumo planificado basado en fórmula del producto
+          try {
+            console.log('🔬 Calculando consumo para producto:', item.product_id);
+            const consumptionQuery = `select * from calculate_planned_consumption('${item.product_id}', ${item.planned_quantity})`;
+            console.log('🔬 Query de consumo:', consumptionQuery);
+
+            const consumptionResponse = await supabaseClient.post('rpc/calculate_planned_consumption', {
+              product_id: item.product_id,
+              p_quantity: item.planned_quantity
+            });
+
+            console.log('🔬 Respuesta de cálculo de consumo:', JSON.stringify(consumptionResponse.data, null, 2));
+
+            const consumptions = consumptionResponse.data || [];
+
+            for (const consumption of consumptions) {
+              console.log('🔬 Creando registro de consumo:', JSON.stringify(consumption, null, 2));
+
+              const consumptionData = {
+                work_order_item_id: itemResponse.data[0].id,
+                raw_material_id: consumption.raw_material_id,
+                planned_consumption: parseFloat(consumption.consumption_quantity),
+                unit: consumption.unit,
+                created_at: new Date().toISOString()
+              };
+
+              const consumptionResult = await supabaseClient.post('work_order_consumption', consumptionData);
+
+              console.log('🔬 Consumo creado:', JSON.stringify(consumptionResult.data, null, 2));
+            }
+          } catch (consumptionError) {
+            console.warn('⚠️ Error calculando consumo para producto:', item.product_id, consumptionError.message);
+            console.warn('⚠️ Detalles del error:', consumptionError.response?.data);
+          }
+        } else {
+          console.warn('⚠️ No se pudo crear el item:', JSON.stringify(item, null, 2));
+        }
+      }
+    } else {
+      console.log('📦 No hay items para procesar');
+    }
+
+    // Verificar disponibilidad de materias primas
+    let warnings = [];
+    try {
+      console.log('🔍 Verificando disponibilidad de materias primas...');
+      const availabilityQuery = `select * from check_raw_materials_availability('${workOrderId}')`;
+      console.log('🔍 Query de disponibilidad:', availabilityQuery);
+
+      const availabilityResponse = await supabaseClient.post('rpc/check_raw_materials_availability', {
+        work_order_uuid: workOrderId
+      });
+
+      console.log('🔍 Respuesta de verificación de disponibilidad:', JSON.stringify(availabilityResponse.data, null, 2));
+
+      const availabilityData = availabilityResponse.data || [];
+
+      availabilityData.forEach(availability => {
+        if (!availability.is_available) {
+          const shortage = availability.shortage_quantity;
+          warnings.push(`Insuficiente ${availability.raw_material_name}: faltan ${shortage} ${availability.raw_material_name}`);
+        }
+      });
+
+      console.log('🔍 Advertencias generadas:', warnings.length);
+    } catch (availabilityError) {
+      console.warn('⚠️ Error verificando disponibilidad:', availabilityError.message);
+      console.warn('⚠️ Detalles del error:', availabilityError.response?.data);
+    }
+
+    console.log('📤 Preparando respuesta final...');
+
+    res.header('Access-Control-Allow-Origin', '*');
+    res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE, OPTIONS');
+    res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization');
+
+    const responseData = {
+      success: true,
+      data: {
+        work_order: searchResponse.data[0],
+        items: createdItems,
+        warnings: warnings
+      },
+      message: warnings.length > 0 ? 'Orden de trabajo creada con advertencias' : 'Orden de trabajo creada exitosamente'
+    };
+
+    console.log('📤 Respuesta final:', JSON.stringify(responseData, null, 2));
+
+    res.status(201).json(responseData);
+    console.log('✅ Respuesta enviada exitosamente');
+
+  } catch (error) {
+    console.error('❌ Error creando orden de trabajo:', error.message);
+    console.error('❌ Stack trace:', error.stack);
+    console.error('❌ Error completo:', error);
+
+    res.header('Access-Control-Allow-Origin', '*');
+    res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE, OPTIONS');
+    res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization');
+
+    res.status(500).json({
+      success: false,
+      message: 'Error creando orden de trabajo',
+      error: error.message,
+      stack: error.stack
+    });
+  }
+});
+
+// 📋 GET ORDEN DE TRABAJO POR ID
+app.get('/work-orders/:id', async (req, res) => {
+  try {
+    console.log('📊 Obteniendo orden de trabajo por ID:', req.params.id);
+
+    // Obtener la orden de trabajo básica
+    const workOrderResponse = await supabaseClient.get(`work_orders?id=eq.${req.params.id}`);
+
+    if (!workOrderResponse.data || workOrderResponse.data.length === 0) {
+      return res.status(404).json({ success: false, message: 'Orden de trabajo no encontrada' });
+    }
+
+    const workOrder = workOrderResponse.data[0];
+
+    // Obtener los items asociados a la orden de trabajo
+    const itemsResponse = await supabaseClient.get(`work_order_items?work_order_id=eq.${req.params.id}`);
+    const items = itemsResponse.data || [];
+
+    // Para cada item, obtener información del producto
+    const itemsWithProducts = await Promise.all(items.map(async (item) => {
+      try {
+        const productResponse = await supabaseClient.get(`products?id=eq.${item.product_id}`);
+        const product = productResponse.data && productResponse.data.length > 0 ? productResponse.data[0] : null;
+
+        return {
+          ...item,
+          product: product
+        };
+      } catch (productError) {
+        console.warn('⚠️ Error obteniendo producto para item:', item.id, productError.message);
+        return {
+          ...item,
+          product: null
+        };
+      }
+    }));
+
+    // Construir respuesta completa
+    const completeWorkOrder = {
+      ...workOrder,
+      items: itemsWithProducts
+    };
+
+    res.header('Access-Control-Allow-Origin', '*');
+    res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE, OPTIONS');
+    res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization');
+
+    res.json({
+      success: true,
+      data: completeWorkOrder
+    });
+
+  } catch (error) {
+    console.error('❌ Error obteniendo orden de trabajo:', error.message);
+
+    res.header('Access-Control-Allow-Origin', '*');
+    res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE, OPTIONS');
+    res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization');
+
+    res.status(500).json({
+      success: false,
+      message: 'Error obteniendo orden de trabajo',
+      error: error.message
+    });
+  }
+});
+
+// 📊 GET DETALLES COMPLETOS DE ORDEN DE TRABAJO
+app.get('/work-orders/:id/details', async (req, res) => {
+  try {
+    console.log('📊 Obteniendo detalles completos de OT:', req.params.id);
+
+    // Use the correct axios RPC call syntax for Supabase
+    const response = await supabaseClient.post('rpc/get_work_order_details', {
+      work_order_uuid: req.params.id
+    });
+
+    console.log('📊 Respuesta RPC:', response.data);
+
+    const result = response.data || [];
+
+    if (!result || result.length === 0) {
+      console.log('⚠️ No se encontraron detalles para la OT:', req.params.id);
+      return res.status(404).json({ success: false, message: 'Orden de trabajo no encontrada o sin detalles' });
+    }
+
+    console.log('📊 Procesando', result.length, 'registros de detalles');
+
+    // Organizar los datos por producto
+    let workOrderDetails = null;
+    const products = {};
+
+    result.forEach((row) => {
+      if (!workOrderDetails) {
+        // Ensure dates are properly formatted as strings (ignoring timezone)
+        const formatDate = function(date) {
+          if (!date) return null;
+
+          // If it's already a string in YYYY-MM-DD format, return as-is
+          if (typeof date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(date)) {
+            return date;
+          }
+
+          // Handle Date objects and date strings, ignoring timezone
+          try {
+            let dateObj;
+
+            if (date instanceof Date) {
+              dateObj = date;
+            } else if (typeof date === 'string') {
+              // Parse date string, assuming it's in YYYY-MM-DD format or ISO format
+              dateObj = new Date(date + (date.includes('T') ? '' : 'T00:00:00'));
+            } else {
+              return null;
+            }
+
+            if (isNaN(dateObj.getTime())) {
+              return null;
+            }
+
+            // Get date components in local timezone to avoid timezone shifts
+            const year = dateObj.getFullYear();
+            const month = String(dateObj.getMonth() + 1).padStart(2, '0');
+            const day = String(dateObj.getDate()).padStart(2, '0');
+
+            return `${year}-${month}-${day}`;
+          } catch (e) {
+            return null;
+          }
+        };
+
+        workOrderDetails = {
+          id: row.work_order_id,
+          order_number: row.order_number,
+          description: row.work_order_description,
+          status: row.work_order_status,
+          priority: row.work_order_priority,
+          planned_start_date: formatDate(row.planned_start_date),
+          planned_end_date: formatDate(row.planned_end_date),
+          actual_start_date: formatDate(row.actual_start_date),
+          actual_end_date: formatDate(row.actual_end_date),
+          created_at: row.work_order_created_at,
+          items: []
+        };
+      }
+
+      const productKey = row.product_id;
+      if (!products[productKey]) {
+        products[productKey] = {
+          id: row.item_id,
+          product_id: row.product_id,
+          product_name: row.product_name,
+          product_unit: row.product_unit,
+          product_base_quantity: row.product_base_quantity,
+          planned_quantity: row.planned_quantity,
+          produced_quantity: row.produced_quantity,
+          status: row.item_status,
+          formula: []
+        };
+      }
+
+      if (row.formula_raw_material_id) {
+        products[productKey].formula.push({
+          raw_material_id: row.formula_raw_material_id,
+          raw_material_name: row.raw_material_name,
+          raw_material_unit: row.raw_material_unit,
+          raw_material_current_stock: row.raw_material_current_stock,
+          quantity: row.formula_quantity,
+          planned_consumption: row.consumption_planned,
+          actual_consumption: row.consumption_actual
+        });
+      }
+    });
+
+    workOrderDetails.items = Object.values(products);
+
+    res.header('Access-Control-Allow-Origin', '*');
+    res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE, OPTIONS');
+    res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization');
+
+    res.json({
+      success: true,
+      data: workOrderDetails
+    });
+
+  } catch (error) {
+    console.error('❌ Error obteniendo detalles de orden de trabajo:', error.message);
+
+    res.header('Access-Control-Allow-Origin', '*');
+    res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE, OPTIONS');
+    res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization');
+
+    res.status(500).json({
+      success: false,
+      message: 'Error obteniendo detalles de orden de trabajo',
+      error: error.message
+    });
+  }
+});
+
+// ✏️ PUT ORDEN DE TRABAJO
+app.put('/work-orders/:id', async (req, res) => {
+  try {
+    console.log('✏️ Actualizando orden de trabajo:', req.params.id);
+    console.log('📊 Body recibido:', JSON.stringify(req.body, null, 2));
+
+    const workOrderId = req.params.id;
+    const { items, ...workOrderUpdates } = req.body;
+
+    // Actualizar la orden de trabajo básica
+    const updates = { ...workOrderUpdates, updated_at: new Date().toISOString() };
+    console.log('📊 Actualizando work_order con:', JSON.stringify(updates, null, 2));
+
+    const response = await supabaseClient.patch(`work_orders?id=eq.${workOrderId}`, updates);
+    console.log('📊 Respuesta de actualización de work_order:', JSON.stringify(response.data, null, 2));
+
+    // Procesar items si existen
+    if (items && Array.isArray(items)) {
+      console.log('📦 Procesando', items.length, 'items...');
+
+      // Obtener items actuales de la OT
+      const currentItemsResponse = await supabaseClient.get(`work_order_items?work_order_id=eq.${workOrderId}`);
+      const currentItems = currentItemsResponse.data || [];
+      console.log('📦 Items actuales:', currentItems.length);
+
+      const updatedProductIds = [];
+
+      for (let i = 0; i < items.length; i++) {
+        const item = items[i];
+        console.log(`📦 Procesando item ${i + 1}/${items.length}:`, JSON.stringify(item, null, 2));
+
+        const productId = item.product_id;
+        const plannedQuantity = parseFloat(item.planned_quantity);
+
+        updatedProductIds.push(productId);
+
+        // Verificar si el item ya existe
+        const existingItem = currentItems.find(ci => ci.product_id === productId);
+
+        if (existingItem) {
+          // Actualizar item existente
+          console.log('📦 Actualizando item existente:', existingItem.id);
+          const itemUpdateData = {
+            planned_quantity: plannedQuantity,
+            updated_at: new Date().toISOString()
+          };
+
+          await supabaseClient.patch(`work_order_items?id=eq.${existingItem.id}`, itemUpdateData);
+
+          // Actualizar consumo planificado
+          try {
+            console.log('🔬 Recalculando consumo para producto:', productId);
+            const consumptionQuery = `select * from calculate_planned_consumption('${productId}', ${plannedQuantity})`;
+            console.log('🔬 Query de consumo:', consumptionQuery);
+
+            const consumptionResponse = await supabaseClient.post('rpc/exec', {
+              query: consumptionQuery
+            });
+
+            const consumptions = consumptionResponse.data || [];
+            console.log('🔬 Consumos calculados:', consumptions.length);
+
+            // Eliminar consumos anteriores
+            await supabaseClient.delete(`work_order_consumption?work_order_item_id=eq.${existingItem.id}`);
+
+            // Crear nuevos consumos
+            for (const consumption of consumptions) {
+              const consumptionData = {
+                work_order_item_id: existingItem.id,
+                raw_material_id: consumption.raw_material_id,
+                planned_consumption: parseFloat(consumption.consumption_quantity),
+                unit: consumption.unit,
+                created_at: new Date().toISOString()
+              };
+
+              await supabaseClient.post('work_order_consumption', consumptionData);
+            }
+          } catch (consumptionError) {
+            console.warn('⚠️ Error recalculando consumo:', consumptionError.message);
+          }
+        } else {
+          // Crear nuevo item
+          console.log('📦 Creando nuevo item para producto:', productId);
+          const newItemData = {
+            work_order_id: workOrderId,
+            product_id: productId,
+            planned_quantity: plannedQuantity,
+            unit: 'unidad', // TODO: obtener de producto
+            status: 'pending',
+            created_at: new Date().toISOString(),
+            updated_at: new Date().toISOString()
+          };
+
+          const itemResponse = await supabaseClient.post('work_order_items', newItemData);
+          const createdItem = itemResponse.data[0];
+          console.log('📦 Nuevo item creado:', createdItem.id);
+
+          // Calcular consumo planificado
+          try {
+            const consumptionQuery = `select * from calculate_planned_consumption('${productId}', ${plannedQuantity})`;
+            const consumptionResponse = await supabaseClient.post('rpc/exec', {
+              query: consumptionQuery
+            });
+
+            const consumptions = consumptionResponse.data || [];
+
+            for (const consumption of consumptions) {
+              const consumptionData = {
+                work_order_item_id: createdItem.id,
+                raw_material_id: consumption.raw_material_id,
+                planned_consumption: parseFloat(consumption.consumption_quantity),
+                unit: consumption.unit,
+                created_at: new Date().toISOString()
+              };
+
+              await supabaseClient.post('work_order_consumption', consumptionData);
+            }
+          } catch (consumptionError) {
+            console.warn('⚠️ Error calculando consumo para nuevo item:', consumptionError.message);
+          }
+        }
+      }
+
+      // Eliminar items que ya no están en la lista
+      for (const currentItem of currentItems) {
+        if (!updatedProductIds.includes(currentItem.product_id)) {
+          console.log('🗑️ Eliminando item obsoleto:', currentItem.id);
+          await supabaseClient.delete(`work_order_items?id=eq.${currentItem.id}`);
+        }
+      }
+    }
+
+    res.header('Access-Control-Allow-Origin', '*');
+    res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE, OPTIONS');
+    res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization');
+
+    res.json({
+      success: true,
+      data: response.data[0] || response.data,
+      message: 'Orden de trabajo actualizada exitosamente'
+    });
+
+  } catch (error) {
+    console.error('❌ Error actualizando orden de trabajo:', error.message);
+    console.error('❌ Stack trace:', error.stack);
+
+    res.header('Access-Control-Allow-Origin', '*');
+    res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE, OPTIONS');
+    res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization');
+
+    res.status(500).json({
+      success: false,
+      message: 'Error actualizando orden de trabajo',
+      error: error.message
+    });
+  }
+});
+
+// 🔄 PATCH CAMBIAR ESTADO DE ORDEN DE TRABAJO
+app.patch('/work-orders/:id/status', async (req, res) => {
+  try {
+    console.log('🔄 Cambiando estado de orden de trabajo:', req.params.id);
+
+    const { status } = req.body;
+    const updates = {
+      status: status,
+      updated_at: new Date().toISOString()
+    };
+
+    // Actualizar fechas según el estado
+    if (status === 'in_progress') {
+      updates.actual_start_date = new Date().toISOString();
+    } else if (status === 'completed') {
+      updates.actual_end_date = new Date().toISOString();
+    }
+
+    const response = await supabaseClient.patch(`work_orders?id=eq.${req.params.id}`, updates);
+
+    res.header('Access-Control-Allow-Origin', '*');
+    res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE, OPTIONS');
+    res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization');
+
+    res.json({
+      success: true,
+      data: response.data[0] || response.data,
+      message: 'Estado de orden de trabajo actualizado exitosamente'
+    });
+
+  } catch (error) {
+    console.error('❌ Error cambiando estado de orden de trabajo:', error.message);
+
+    res.header('Access-Control-Allow-Origin', '*');
+    res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE, OPTIONS');
+    res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization');
+
+    res.status(500).json({
+      success: false,
+      message: 'Error cambiando estado de orden de trabajo',
+      error: error.message
+    });
+  }
+});
+
+// 🗑️ DELETE ORDEN DE TRABAJO
+app.delete('/work-orders/:id', async (req, res) => {
+  try {
+    console.log('🗑️ Eliminando orden de trabajo:', req.params.id);
+
+    // Verificar que no esté en progreso o completada
+    const checkResponse = await supabaseClient.get(`work_orders?id=eq.${req.params.id}`);
+    const workOrder = checkResponse.data[0];
+
+    if (workOrder && ['in_progress', 'completed'].includes(workOrder.status)) {
+      return res.status(400).json({
+        success: false,
+        message: 'No se puede eliminar una orden de trabajo en progreso o completada'
+      });
+    }
+
+    await supabaseClient.delete(`work_orders?id=eq.${req.params.id}`);
+
+    res.header('Access-Control-Allow-Origin', '*');
+    res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE, OPTIONS');
+    res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization');
+
+    res.json({
+      success: true,
+      message: 'Orden de trabajo eliminada exitosamente'
+    });
+
+  } catch (error) {
+    console.error('❌ Error eliminando orden de trabajo:', error.message);
+
+    res.header('Access-Control-Allow-Origin', '*');
+    res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE, OPTIONS');
+    res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization');
+
+    res.status(500).json({
+      success: false,
+      message: 'Error eliminando orden de trabajo',
+      error: error.message
+    });
+  }
+});
+
 // 🚀 START SERVER
 app.listen(PORT, () => {
   console.log('=======================================');
@@ -1102,22 +1854,18 @@ app.listen(PORT, () => {
   console.log('   ✅ GET /raw-materials/:id/entries → Historial entradas');
   console.log('   ✅ POST /raw-materials/:id/entries → Crear entrada');
   console.log();
-  console.log('🎯 PRODUCTOS ENDPOINTS:');
-  console.log('   ✅ GET /products → Lista productos');
-  console.log('   ✅ POST /products → Crear producto');
-  console.log('   ✅ GET /products/:id → Producto por ID');
-  console.log('   ✅ PUT /products/:id → Actualizar producto');
-  console.log('   ✅ PATCH /products/:id/disable → Cambiar estado');
-  console.log('   ✅ DELETE /products/:id → Eliminar producto');
-  console.log('   ✅ GET /products/:id/formula → Fórmula del producto');
-  console.log('   ✅ POST /products/:id/formula → Agregar ingrediente');
-  console.log('   ✅ PUT /products/:id/formula/:rawMaterialId → Actualizar ingrediente');
-  console.log('   ✅ DELETE /products/:id/formula/:rawMaterialId → Eliminar ingrediente');
-  console.log('   ✅ GET /products/:id/with-formula → Producto completo');
+  console.log('🎯 ÓRDENES DE TRABAJO ENDPOINTS:');
+  console.log('   ✅ GET /work-orders → Lista órdenes de trabajo');
+  console.log('   ✅ POST /work-orders → Crear orden de trabajo');
+  console.log('   ✅ GET /work-orders/:id → Orden de trabajo por ID');
+  console.log('   ✅ PUT /work-orders/:id → Actualizar orden de trabajo');
+  console.log('   ✅ PATCH /work-orders/:id/status → Cambiar estado');
+  console.log('   ✅ DELETE /work-orders/:id → Eliminar orden de trabajo');
+  console.log('   ✅ GET /work-orders/:id/details → Detalles completos');
   console.log();
   console.log('📱 Frontend listo en: http://localhost:5174');
   console.log('🛡️ CORS headers aplicados a todas las respuestas');
-  console.log('🔥 ¡YA PUEDES CREAR PRODUCTOS Y FÓRMULAS!');
+  console.log('🔥 ¡YA PUEDES CREAR ÓRDENES DE TRABAJO!');
 });
 
 module.exports = app;
