@@ -1,0 +1,285 @@
+.raw-materials-list {
+  padding: 20px;
+  max-width: 1200px;
+  margin: 0 auto;
+}
+
+.header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 30px;
+  flex-wrap: wrap;
+  gap: 20px;
+}
+
+.header h1 {
+  margin: 0;
+  color: #333;
+}
+
+.controls {
+  display: flex;
+  align-items: center;
+  gap: 15px;
+  flex-wrap: wrap;
+}
+
+.search-input {
+  padding: 10px 15px;
+  border: 1px solid #ddd;
+  border-radius: 5px;
+  font-size: 14px;
+  width: 250px;
+}
+
+.checkbox-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+  cursor: pointer;
+}
+
+.checkbox-label input[type="checkbox"] {
+  width: 18px;
+  height: 18px;
+  accent-color: #007bff;
+}
+
+.materials-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(350px, 1fr));
+  gap: 20px;
+}
+
+.material-card {
+  border: 1px solid #ddd;
+  border-radius: 8px;
+  padding: 20px;
+  background-color: white;
+  box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+  transition: box-shadow 0.3s ease;
+}
+
+.material-card:hover {
+  box-shadow: 0 4px 8px rgba(0,0,0,0.15);
+}
+
+.material-card.inactive {
+  opacity: 0.6;
+  border-color: #f5f5f5;
+}
+
+.card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  margin-bottom: 15px;
+  gap: 10px;
+}
+
+.card-header h3 {
+  margin: 0;
+  color: #333;
+  flex-grow: 1;
+}
+
+.status-indicator {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.badge {
+  padding: 4px 8px;
+  border-radius: 4px;
+  font-size: 12px;
+  font-weight: 500;
+  text-transform: uppercase;
+}
+
+.badge.inactive {
+  background-color: #9ca3af;
+  color: white;
+}
+
+.badge.normal-stock {
+  background-color: #10b981;
+  color: white;
+}
+
+.badge.low-stock {
+  background-color: #f59e0b;
+  color: white;
+}
+
+.badge.out-of-stock {
+  background-color: #ef4444;
+  color: white;
+}
+
+.badge.high-stock {
+  background-color: #8b5cf6;
+  color: white;
+}
+
+.card-content {
+  margin-bottom: 20px;
+}
+
+.info-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8px;
+  min-height: 24px;
+}
+
+.label {
+  font-weight: 600;
+  color: #666;
+  font-size: 14px;
+}
+
+.value {
+  text-align: right;
+  font-size: 14px;
+  color: #333;
+}
+
+.stock-value {
+  font-weight: bold;
+  font-size: 16px;
+}
+
+.description {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid #eee;
+}
+
+.card-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding-top: 15px;
+  border-top: 1px solid #eee;
+}
+
+.card-actions button {
+  padding: 8px 12px;
+  border: none;
+  border-radius: 5px;
+  cursor: pointer;
+  transition: background-color 0.2s ease;
+  font-size: 14px;
+  color: #666;
+  background: transparent;
+}
+
+.card-actions button:hover {
+  background-color: #f5f5f5;
+}
+
+.card-actions button.warning {
+  color: #f59e0b;
+}
+
+.card-actions button.warning:hover {
+  background-color: #fef3c7;
+}
+
+.card-actions button.danger {
+  color: #ef4444;
+}
+
+.card-actions button.danger:hover {
+  background-color: #fef2f2;
+}
+
+.card-actions button.success {
+  color: #10b981;
+}
+
+.card-actions button.success:hover {
+  background-color: #ecfdf5;
+}
+
+.loading-container {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  height: 200px;
+}
+
+.loading {
+  font-size: 18px;
+  color: #666;
+}
+
+.empty-state {
+  grid-column: 1 / -1;
+  text-align: center;
+  padding: 60px 20px;
+  color: #666;
+  font-size: 16px;
+}
+
+/* Responsive */
+@media (max-width: 768px) {
+  .materials-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .header {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .header h1 {
+    text-align: center;
+  }
+
+  .controls {
+    justify-content: space-between;
+    width: 100%;
+  }
+
+  .search-input {
+    width: 150px;
+  }
+
+  .info-row {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 4px;
+  }
+
+  .card-header {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .card-actions {
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+
+  .card-actions button {
+    padding: 6px 10px;
+    font-size: 12px;
+  }
+}
+
+/* Stock Calculated Badge */
+.stock-calculated-badge {
+  font-size: 11px;
+  color: #6b7280;
+  background-color: #f9fafb;
+  padding: 2px 6px;
+  border-radius: 10px;
+  border: 1px solid #e2e8f0;
+  margin-left: 6px;
+  font-weight: normal;
+}
