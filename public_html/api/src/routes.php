@@ -1419,7 +1419,7 @@ $app->get('/work-orders', function ($request, $response, $args) use ($supabase_c
 
         echo "📊 Petición GET /work-orders\n";
 
-        $query = 'select=id,order_number,description,status,priority,planned_start_date,planned_end_date,actual_start_date,actual_end_date,notes,created_by,created_at,updated_at&order=created_at.desc&limit=' . $limit;
+        $query = 'select=id,order_number,description,status,priority,planned_start_date,planned_end_date,actual_start_datetime,actual_end_datetime,notes,created_by,created_at,updated_at&order=created_at.desc&limit=' . $limit;
 
         if ($status && in_array($status, ['pending', 'in_progress', 'completed', 'cancelled'])) {
             $query .= "&status=eq.{$status}";
@@ -1529,15 +1529,24 @@ $app->get('/work-orders/{id}/details', function ($request, $response, $args) use
                         return null;
                     }
 
+                    // For actual dates (with time), preserve the full datetime
+                    $isActualDate = strpos($fieldName, 'actual_') === 0;
+
                     if ($date instanceof DateTime) {
-                        $formatted = $date->format('Y-m-d');
+                        $formatted = $isActualDate ? $date->format('c') : $date->format('Y-m-d');
                         echo "📊 [DEBUG] Fecha {$fieldName} es DateTime, formateada a: {$formatted}\n";
                         return $formatted;
                     }
 
-                    // If it's already a string in YYYY-MM-DD format, return as-is
-                    if (is_string($date) && preg_match('/^\d{4}-\d{2}-\d{2}$/', $date)) {
+                    // If it's already a string in YYYY-MM-DD format and it's a planned date, return as-is
+                    if (is_string($date) && preg_match('/^\d{4}-\d{2}-\d{2}$/', $date) && !$isActualDate) {
                         echo "📊 [DEBUG] Fecha {$fieldName} ya está en formato YYYY-MM-DD: {$date}\n";
+                        return $date;
+                    }
+
+                    // If it's a datetime string, return as-is for actual dates
+                    if (is_string($date) && preg_match('/^\d{4}-\d{2}-\d{2}T/', $date) && $isActualDate) {
+                        echo "📊 [DEBUG] Fecha {$fieldName} ya está en formato ISO datetime: {$date}\n";
                         return $date;
                     }
 
@@ -1545,7 +1554,7 @@ $app->get('/work-orders/{id}/details', function ($request, $response, $args) use
                     try {
                         echo "📊 [DEBUG] Intentando parsear fecha {$fieldName} como string: {$date}\n";
                         $dateTime = new DateTime($date);
-                        $formatted = $dateTime->format('Y-m-d');
+                        $formatted = $isActualDate ? $dateTime->format('c') : $dateTime->format('Y-m-d');
                         echo "📊 [DEBUG] Fecha {$fieldName} parseada exitosamente a: {$formatted}\n";
                         return $formatted;
                     } catch (Exception $e) {
@@ -1554,19 +1563,22 @@ $app->get('/work-orders/{id}/details', function ($request, $response, $args) use
                     }
                 };
 
-                $work_order_details = [
-                    'id' => $row['work_order_id'],
-                    'order_number' => $row['order_number'],
-                    'description' => $row['work_order_description'],
-                    'status' => $row['work_order_status'],
-                    'priority' => $row['work_order_priority'],
-                    'planned_start_date' => $formatDate($row['planned_start_date'], 'planned_start_date'),
-                    'planned_end_date' => $formatDate($row['planned_end_date'], 'planned_end_date'),
-                    'actual_start_date' => $formatDate($row['actual_start_date'], 'actual_start_date'),
-                    'actual_end_date' => $formatDate($row['actual_end_date'], 'actual_end_date'),
-                    'created_at' => $row['work_order_created_at'],
-                    'items' => []
-                ];
+        $work_order_details = [
+            'id' => $row['work_order_id'],
+            'order_number' => $row['order_number'],
+            'description' => $row['work_order_description'],
+            'status' => $row['work_order_status'],
+            'priority' => $row['work_order_priority'],
+            'planned_start_date' => $formatDate($row['planned_start_date'], 'planned_start_date'),
+            'planned_end_date' => $formatDate($row['planned_end_date'], 'planned_end_date'),
+            'actual_start_date' => $formatDate($row['actual_start_date'], 'actual_start_date'),
+            'actual_end_date' => $formatDate($row['actual_end_date'], 'actual_end_date'),
+            // Use the correct datetime fields from the database
+            'actual_start_datetime' => $formatDate($row['actual_start_datetime'], 'actual_start_datetime'),
+            'actual_end_datetime' => $formatDate($row['actual_end_datetime'], 'actual_end_datetime'),
+            'created_at' => $row['work_order_created_at'],
+            'items' => []
+        ];
 
                 echo "📊 [DEBUG] Work order details creados: " . print_r($work_order_details, true) . "\n";
             }
@@ -2298,11 +2310,13 @@ $app->patch('/work-orders/{id}/status', function ($request, $response, $args) us
             'updated_at' => date('Y-m-d\TH:i:s\Z')
         ];
 
-        // Actualizar fechas según el estado
+        // Actualizar fechas según el estado con timestamp completo
         if ($new_status === 'in_progress') {
-            $dataToUpdate['actual_start_date'] = date('Y-m-d\TH:i:s\Z');
+            $dataToUpdate['actual_start_datetime'] = date('Y-m-d\TH:i:s\Z');
+            $dataToUpdate['actual_start_date'] = date('Y-m-d'); // Keep for backward compatibility
         } elseif ($new_status === 'completed') {
-            $dataToUpdate['actual_end_date'] = date('Y-m-d\TH:i:s\Z');
+            $dataToUpdate['actual_end_datetime'] = date('Y-m-d\TH:i:s\Z');
+            $dataToUpdate['actual_end_date'] = date('Y-m-d'); // Keep for backward compatibility
         }
 
         $api_response = $supabase_client->patch("work_orders?id=eq.{$id}", [
