@@ -45,6 +45,9 @@ const WorkOrderDetails: React.FC<WorkOrderDetailsProps> = ({
       const result = await getWorkOrderDetails(workOrder.id);
 
       if (result.success && result.data) {
+        console.log('🔍 WorkOrderDetails - Datos recibidos del servidor:', result.data);
+        console.log('🔍 actual_start_datetime:', result.data.actual_start_datetime);
+        console.log('🔍 actual_start_date:', result.data.actual_start_date);
         setDetails(result.data);
       } else {
         setError(result.message || 'Error al cargar detalles');
@@ -96,41 +99,54 @@ const WorkOrderDetails: React.FC<WorkOrderDetailsProps> = ({
     }
   };
 
-  const formatDate = (dateString: string | undefined) => {
+  const formatDate = (dateString: string | undefined, isActualDate: boolean = false) => {
     if (!dateString) return '-';
 
-    // Handle different date formats that might come from the database
-    let date: Date;
-
-    // If it's already a valid date string in YYYY-MM-DD format, parse it without timezone
-    if (typeof dateString === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(dateString)) {
-      // Parse as local date to avoid timezone shifts
-      const [year, month, day] = dateString.split('-').map(Number);
-      date = new Date(year, month - 1, day); // month is 0-indexed
-    } else {
-      // Fallback for other date formats
-      date = new Date(dateString);
+    // Debug log para ver qué datos llegan
+    if (isActualDate) {
+      console.log('🕐 WorkOrderDetails formatDate - dateString:', dateString, 'isActualDate:', isActualDate);
     }
 
-    if (isNaN(date.getTime())) {
+    try {
+      // Handle different date formats that might come from the database
+      let date: Date;
+
+      // If it's a datetime string (contains 'T'), parse it directly
+      if (typeof dateString === 'string' && dateString.includes('T')) {
+        // Parse the ISO string directly - JavaScript handles timezone conversion automatically
+        date = new Date(dateString);
+      } else if (typeof dateString === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(dateString)) {
+        // Parse as local date to avoid timezone shifts
+        const [year, month, day] = dateString.split('-').map(Number);
+        date = new Date(year, month - 1, day); // month is 0-indexed
+      } else {
+        // Fallback for other date formats
+        date = new Date(dateString);
+      }
+
+      if (isNaN(date.getTime())) {
+        console.warn('Invalid date string:', dateString);
+        return '-';
+      }
+
+      // Format manually to avoid timezone issues
+      const day = String(date.getDate()).padStart(2, '0');
+      const month = String(date.getMonth() + 1).padStart(2, '0');
+      const year = date.getFullYear();
+
+      // For actual dates (with time), show time as well
+      if (isActualDate || (dateString && dateString.includes('T'))) {
+        const hours = String(date.getHours()).padStart(2, '0');
+        const minutes = String(date.getMinutes()).padStart(2, '0');
+        return `${day}/${month}/${year}, ${hours}:${minutes}`;
+      }
+
+      // For planned dates or date-only strings, show only date
+      return `${day}/${month}/${year}`;
+    } catch (error) {
+      console.error('Error formatting date:', dateString, error);
       return '-';
     }
-
-    // Format manually to avoid timezone issues
-    const day = String(date.getDate()).padStart(2, '0');
-    const month = String(date.getMonth() + 1).padStart(2, '0');
-    const year = date.getFullYear();
-
-    // For dates without time, don't show time
-    if (dateString && /^\d{4}-\d{2}-\d{2}$/.test(dateString)) {
-      return `${day}/${month}/${year}`;
-    }
-
-    // For dates with time, show time as well
-    const hours = String(date.getHours()).padStart(2, '0');
-    const minutes = String(date.getMinutes()).padStart(2, '0');
-
-    return `${day}/${month}/${year}, ${hours}:${minutes}`;
   };
 
   const formatNumber = (num: number) => {
@@ -336,11 +352,11 @@ const WorkOrderDetails: React.FC<WorkOrderDetailsProps> = ({
                   </div>
                   <div className="date-item">
                     <label>Inicio Real:</label>
-                    <span>{formatDate(details.actual_start_date)}</span>
+                    <span>{formatDate(details.actual_start_datetime, true)}</span>
                   </div>
                   <div className="date-item">
                     <label>Fin Real:</label>
-                    <span>{formatDate(details.actual_end_date)}</span>
+                    <span>{formatDate(details.actual_end_datetime, true)}</span>
                   </div>
                 </div>
               </div>
