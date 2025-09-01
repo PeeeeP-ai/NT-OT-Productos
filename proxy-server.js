@@ -1750,35 +1750,356 @@ app.put('/work-orders/:id', async (req, res) => {
 // 🔄 PATCH CAMBIAR ESTADO DE ORDEN DE TRABAJO
 app.patch('/work-orders/:id/status', async (req, res) => {
   try {
-    console.log('🔄 Cambiando estado de orden de trabajo:', req.params.id);
+    const workOrderId = req.params.id;
+    const { status: new_status } = req.body;
 
-    const { status } = req.body;
+    console.log('🔄 [STATUS_CHANGE_START] Starting status change for work order:', workOrderId);
+    console.log('🔄 [STATUS_CHANGE_START] New status requested:', new_status);
+    console.log('🔄 [STATUS_CHANGE_START] Input data:', JSON.stringify(req.body, null, 2));
+
+    if (!new_status || !['pending', 'in_progress', 'completed', 'cancelled'].includes(new_status)) {
+      console.log('❌ [STATUS_CHANGE_START] Invalid status:', new_status);
+      return res.status(400).json({
+        success: false,
+        message: 'Estado inválido. Debe ser: pending, in_progress, completed o cancelled'
+      });
+    }
+
+    console.log('📊 [STATUS_CHANGE] Starting status change processing...');
+    console.log('📊 Cambiando estado de OT', workOrderId, 'a', new_status);
+
+    // Verificar que la OT existe
+    const checkResponse = await supabaseClient.get(`work_orders?id=eq.${workOrderId}`);
+    const checkData = checkResponse.data;
+
+    if (!checkData || checkData.length === 0) {
+      console.log('❌ [STATUS_CHANGE] Work order not found:', workOrderId);
+      return res.status(404).json({
+        success: false,
+        message: 'Orden de trabajo no encontrada'
+      });
+    }
+
+    const currentWorkOrder = checkData[0];
+    const currentStatus = currentWorkOrder.status;
+
+    console.log('📊 [STATUS_CHECK] Current status in database:', currentStatus);
+    console.log('📊 [STATUS_CHECK] Requested new status:', new_status);
+    console.log('📊 [STATUS_CHECK] Work order data:', JSON.stringify(currentWorkOrder, null, 2));
+
+    // Si estamos cambiando de pending a in_progress, deducir stock de materias primas
+    // O si ya está en in_progress pero no se ha deducido stock aún
+    let shouldDeductStock = false;
+    let consumptions = [];
+    let warnings = []; // Initialize warnings variable here
+
+    if (currentStatus === 'pending' && new_status === 'in_progress') {
+      console.log('✅ [STATUS_CHECK] Condition met: changing from pending to in_progress');
+      shouldDeductStock = true;
+    } else if (currentStatus === 'in_progress' && new_status === 'in_progress') {
+      console.log('🔄 [STATUS_CHECK] Work order already in progress - checking if stock needs to be deducted');
+
+      // Obtener consumo planificado de la OT para verificar si ya se dedujo stock
+      try {
+        console.log('📊 [STATUS_CHANGE] Querying consumptions for work order:', workOrderId);
+        const consumptionQuery = `select * from get_work_order_details('${workOrderId}') where consumption_planned > 0`;
+        console.log('📊 [STATUS_CHANGE] Consumption query:', consumptionQuery);
+
+        const consumptionResponse = await supabaseClient.post('rpc/exec', {
+          query: consumptionQuery
+        });
+
+        consumptions = consumptionResponse.data || [];
+        console.log('📊 [STATUS_CHANGE] Consumptions found:', consumptions.length);
+
+        if (consumptions.length > 0) {
+          console.log('📊 [STATUS_CHANGE] First consumption:', JSON.stringify(consumptions[0], null, 2));
+
+          // Verificar si ya se dedujo stock consultando inventory_entries
+          const materialIds = consumptions.map(c => `'${c.formula_raw_material_id}'`).join(',');
+          console.log('📊 [STATUS_CHANGE] Checking existing inventory entries for materials:', materialIds);
+
+          const existingEntriesResponse = await supabaseClient.get(`inventory_entries?raw_material_id=in.(${materialIds})&notes=ilike.%OT ${currentWorkOrder.order_number}%`);
+          const existingEntries = existingEntriesResponse.data || [];
+
+          console.log('📊 [STATUS_CHANGE] Existing inventory entries found:', existingEntries.length);
+
+          if (existingEntries.length === 0) {
+            console.log('⚠️ [STATUS_CHECK] No stock deduction found for this work order - will deduct now');
+            shouldDeductStock = true;
+          } else {
+            console.log('✅ [STATUS_CHECK] Stock already deducted for this work order - skipping');
+            shouldDeductStock = false;
+          }
+        } else {
+          console.log('⚠️ [STATUS_CHECK] No consumptions found for this work order');
+          shouldDeductStock = false;
+        }
+      } catch (error) {
+        console.log('❌ [STATUS_CHANGE] Error querying consumptions:', error.message);
+        consumptions = [];
+        shouldDeductStock = false;
+      }
+    }
+
+    if (shouldDeductStock) {
+      console.log('📊 [STATUS_CHANGE] Iniciando OT - deducir stock de materias primas');
+      console.log('📊 [STATUS_CHANGE] Work Order ID:', workOrderId);
+      console.log('📊 [STATUS_CHANGE] Current status:', currentStatus, '-> New status:', new_status);
+
+      // Obtener consumo planificado de la OT usando la función RPC directa
+      try {
+        console.log('📊 [STATUS_CHANGE] Ejecutando RPC call para get_work_order_details...');
+        const consumptionResponse = await supabaseClient.post('rpc/get_work_order_details', {
+          work_order_uuid: workOrderId
+        });
+
+        console.log('📊 [STATUS_CHANGE] RPC Response status:', consumptionResponse.status);
+        const responseBody = consumptionResponse.data;
+        console.log('📊 [STATUS_CHANGE] RPC Raw response length:', JSON.stringify(responseBody).length, 'characters');
+
+        consumptions = responseBody || [];
+
+        console.log('📊 [STATUS_CHANGE] Consumos encontrados:', consumptions.length);
+
+        if (consumptions.length > 0) {
+          console.log('📊 [STATUS_CHANGE] Primer consumo:', JSON.stringify(consumptions[0], null, 2));
+          console.log('📊 [STATUS_CHANGE] Todos los consumos:');
+          consumptions.forEach((consumption, index) => {
+            console.log(`📊 [STATUS_CHANGE] Consumo ${index}:`, JSON.stringify(consumption, null, 2));
+          });
+        } else {
+          console.log('⚠️ [STATUS_CHANGE] No se encontraron consumos planificados');
+        }
+      } catch (error) {
+        console.log('❌ [STATUS_CHANGE] Error en RPC call:', error.message);
+        console.log('❌ [STATUS_CHANGE] Exception details:', error);
+        consumptions = [];
+      }
+
+      // LOG: Verificar si hay consumos para procesar
+      console.log('🔍 [LOG_CONSUMPTION] Total consumptions to process:', consumptions.length);
+      if (consumptions.length === 0) {
+        console.log('⚠️ [LOG_CONSUMPTION] No consumptions found - stock deduction will be skipped');
+      }
+
+      const warnings = [];
+      const consumptionsByMaterial = {}; // Initialize outside the conditional block
+
+      if (consumptions.length > 0) {
+        // Agrupar consumos por materia prima para evitar duplicados
+        consumptions.forEach(consumption => {
+          const rawMaterialId = consumption.formula_raw_material_id;
+          if (!consumptionsByMaterial[rawMaterialId]) {
+            consumptionsByMaterial[rawMaterialId] = {
+              raw_material_id: rawMaterialId,
+              raw_material_name: consumption.raw_material_name,
+              planned_consumption: 0,
+              unit: consumption.raw_material_unit
+            };
+          }
+          consumptionsByMaterial[rawMaterialId].planned_consumption += consumption.consumption_planned;
+        });
+
+        console.log('📊 [DEBUG] Consumos agrupados:', Object.keys(consumptionsByMaterial).length);
+
+        const insufficientStock = [];
+
+        // Verificar disponibilidad de stock para todas las materias primas
+        for (const materialId in consumptionsByMaterial) {
+          const consumption = consumptionsByMaterial[materialId];
+          const plannedConsumption = consumption.planned_consumption;
+
+          console.log('🔍 [STOCK_CHECK] Verificando stock para material ID:', materialId);
+          console.log('🔍 [STOCK_CHECK] Consumo planificado requerido:', plannedConsumption);
+
+          // Obtener stock actual de la materia prima
+          const stockResponse = await supabaseClient.get(`raw_materials?id=eq.${materialId}&select=id,name,current_stock,unit`);
+          const stockData = stockResponse.data;
+
+          console.log('🔍 [STOCK_CHECK] Stock response status:', stockResponse.status);
+          console.log('🔍 [STOCK_CHECK] Stock data:', JSON.stringify(stockData, null, 2));
+
+          if (stockData && stockData.length > 0) {
+            const material = stockData[0];
+            const currentStock = material.current_stock;
+
+            console.log('🔍 [STOCK_CHECK] Material:', material.name, 'Stock actual:', currentStock, material.unit);
+
+            if (currentStock < plannedConsumption) {
+              console.log('⚠️ [STOCK_CHECK] STOCK INSUFICIENTE:', material.name, '- Disponible:', currentStock, 'Requerido:', plannedConsumption);
+              insufficientStock.push({
+                name: material.name,
+                available: currentStock,
+                required: plannedConsumption,
+                unit: material.unit
+              });
+            } else {
+              console.log('✅ [STOCK_CHECK] Stock suficiente:', material.name, '- Disponible:', currentStock, 'Requerido:', plannedConsumption);
+            }
+          } else {
+            console.log('❌ [STOCK_CHECK] No se pudo obtener datos de stock para material ID:', materialId);
+          }
+        }
+
+        // Registrar advertencias por stock insuficiente
+        if (insufficientStock.length > 0) {
+          insufficientStock.forEach(item => {
+            warnings.push(`Advertencia: Stock insuficiente de '${item.name}': disponible ${item.available} ${item.unit}, requerido ${item.required} ${item.unit}`);
+          });
+        }
+
+        // Deducir stock de todas las materias primas (permitir stock negativo si es necesario)
+        for (const materialId in consumptionsByMaterial) {
+          const consumption = consumptionsByMaterial[materialId];
+          const plannedConsumption = consumption.planned_consumption;
+          const materialName = consumption.raw_material_name;
+
+          console.log('📊 [STATUS_CHANGE] Procesando material:', materialName, '(ID:', materialId, ')');
+          console.log('📊 [STATUS_CHANGE] Consumo planificado:', plannedConsumption);
+
+          // Obtener stock actual
+          console.log('📊 [STATUS_CHANGE] Obteniendo stock actual para', materialId, '...');
+          const stockResponse = await supabaseClient.get(`raw_materials?id=eq.${materialId}&select=current_stock`);
+          const stockData = stockResponse.data;
+
+          console.log('📊 [STATUS_CHANGE] Stock response status:', stockResponse.status);
+          console.log('📊 [STATUS_CHANGE] Stock data:', JSON.stringify(stockData, null, 2));
+
+          if (stockData && stockData.length > 0) {
+            const currentStock = stockData[0].current_stock;
+            const newStock = currentStock - plannedConsumption;
+
+            console.log('📊 [STATUS_CHANGE] Stock actual:', currentStock, 'Nuevo stock:', newStock);
+
+            // Actualizar stock de la materia prima (permitir negativo)
+            const stockUpdate = {
+              current_stock: newStock,
+              updated_at: new Date().toISOString()
+            };
+
+            console.log('📊 [STOCK_UPDATE] Actualizando stock para', materialName, '(ID:', materialId, ')');
+            console.log('📊 [STOCK_UPDATE] Datos de actualización:', JSON.stringify(stockUpdate, null, 2));
+            console.log('📊 [STOCK_UPDATE] Stock anterior:', currentStock, 'Nuevo stock:', newStock, 'Diferencia: -' + plannedConsumption);
+
+            const updateResponse = await supabaseClient.patch(`raw_materials?id=eq.${materialId}`, stockUpdate);
+
+            console.log('📊 [STOCK_UPDATE] Stock update response status:', updateResponse.status);
+
+            if (updateResponse.status >= 200 && updateResponse.status < 300) {
+              console.log('✅ [STOCK_UPDATE] Stock actualizado exitosamente:', materialName, '->', newStock, '(deducido:', plannedConsumption, ')');
+
+              // Verificar que el stock se actualizó correctamente
+              const verifyResponse = await supabaseClient.get(`raw_materials?id=eq.${materialId}&select=current_stock`);
+              const verifyData = verifyResponse.data;
+              if (verifyData && verifyData.length > 0) {
+                const verifiedStock = verifyData[0].current_stock;
+                console.log('🔍 [STOCK_VERIFY] Verificación de stock: esperado', newStock, 'actual en BD', verifiedStock);
+                if (verifiedStock === newStock) {
+                  console.log('✅ [STOCK_VERIFY] Stock verificado correctamente');
+                } else {
+                  console.log('❌ [STOCK_VERIFY] ERROR: Stock no coincide - esperado', newStock, 'actual', verifiedStock);
+                }
+              }
+            } else {
+              console.log('❌ [STOCK_UPDATE] ERROR al actualizar stock para', materialName);
+              const errorBody = updateResponse.data;
+              console.log('❌ [STOCK_UPDATE] Error response:', JSON.stringify(errorBody, null, 2));
+            }
+
+            // Registrar movimiento de salida en inventory_entries
+            const movementData = {
+              raw_material_id: materialId,
+              quantity: plannedConsumption,
+              entry_type: 'out',
+              notes: `${currentWorkOrder.order_number} - ${materialName}`,
+              movement_date: new Date().toISOString()
+            };
+
+            console.log('📊 [INVENTORY_ENTRY] Creando entrada de inventario para', materialName);
+            console.log('📊 [INVENTORY_ENTRY] Datos del movimiento:', JSON.stringify(movementData, null, 2));
+
+            const inventoryResponse = await supabaseClient.post('inventory_entries', movementData);
+
+            console.log('📊 [INVENTORY_ENTRY] Response status:', inventoryResponse.status);
+
+            if (inventoryResponse.status >= 200 && inventoryResponse.status < 300) {
+              const inventoryResponseBody = inventoryResponse.data;
+              console.log('📊 [INVENTORY_ENTRY] Response body:', JSON.stringify(inventoryResponseBody, null, 2));
+
+              if (inventoryResponseBody && inventoryResponseBody.length > 0 && inventoryResponseBody[0].id) {
+                console.log('✅ [INVENTORY_ENTRY] Movimiento registrado exitosamente - ID:', inventoryResponseBody[0].id);
+                console.log('✅ [INVENTORY_ENTRY] Movimiento:', materialName, '- Cantidad:', plannedConsumption, '- Tipo: out');
+              } else {
+                console.log('⚠️ [INVENTORY_ENTRY] Movimiento creado pero no se pudo obtener el ID');
+              }
+            } else {
+              console.log('❌ [INVENTORY_ENTRY] ERROR al crear entrada de inventario para', materialName);
+              const errorBody = inventoryResponse.data;
+              console.log('❌ [INVENTORY_ENTRY] Error response:', JSON.stringify(errorBody, null, 2));
+            }
+          } else {
+            console.log('❌ [STATUS_CHANGE] No se pudo obtener stock para material', materialId);
+          }
+        }
+
+        console.log('✅ Todos los stocks deducidos exitosamente');
+      } else {
+        console.log('⚠️ No se encontró consumo planificado para la OT');
+      }
+
+      // LOG FINAL: Resumen del proceso de cambio de estado
+      console.log('🎯 [STATUS_CHANGE_SUMMARY] Resumen del cambio de estado OT', workOrderId);
+      console.log('🎯 [STATUS_CHANGE_SUMMARY] Estado anterior:', currentStatus);
+      console.log('🎯 [STATUS_CHANGE_SUMMARY] Estado nuevo:', new_status);
+      console.log('🎯 [STATUS_CHANGE_SUMMARY] Consumos procesados:', Object.keys(consumptionsByMaterial || {}).length);
+      console.log('🎯 [STATUS_CHANGE_SUMMARY] Advertencias:', warnings.length);
+      if (warnings.length > 0) {
+        warnings.forEach((warning, index) => {
+          console.log('🎯 [STATUS_CHANGE_SUMMARY] ⚠️', warning);
+        });
+      }
+      console.log('🎯 [STATUS_CHANGE_SUMMARY] Proceso completado exitosamente');
+    }
+
     const updates = {
-      status: status,
+      status: new_status,
       updated_at: new Date().toISOString()
     };
 
     // Actualizar fechas según el estado
-    if (status === 'in_progress') {
+    if (new_status === 'in_progress') {
       updates.actual_start_date = new Date().toISOString();
-    } else if (status === 'completed') {
+    } else if (new_status === 'completed') {
       updates.actual_end_date = new Date().toISOString();
     }
 
-    const response = await supabaseClient.patch(`work_orders?id=eq.${req.params.id}`, updates);
+    const response = await supabaseClient.patch(`work_orders?id=eq.${workOrderId}`, updates);
+
+    console.log('📊 [STATUS_CHANGE] Work order status update response:', response.status);
 
     res.header('Access-Control-Allow-Origin', '*');
     res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE, OPTIONS');
     res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization');
 
-    res.json({
+    const result = {
       success: true,
-      data: response.data[0] || response.data,
+      data: response.data && response.data.length > 0 ? response.data[0] : response.data,
       message: 'Estado de orden de trabajo actualizado exitosamente'
-    });
+    };
+
+    // Incluir advertencias en la respuesta si las hay
+    if (warnings && warnings.length > 0) {
+      result.warnings = warnings;
+      result.message += ' (con advertencias de stock)';
+    }
+
+    console.log('📤 [STATUS_CHANGE] Response:', JSON.stringify(result, null, 2));
+    res.json(result);
 
   } catch (error) {
     console.error('❌ Error cambiando estado de orden de trabajo:', error.message);
+    console.error('❌ Stack trace:', error.stack);
 
     res.header('Access-Control-Allow-Origin', '*');
     res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE, OPTIONS');
@@ -1792,7 +2113,7 @@ app.patch('/work-orders/:id/status', async (req, res) => {
   }
 });
 
-// 🗑️ DELETE ORDEN DE TRABAJO
+ // 🗑️ DELETE ORDEN DE TRABAJO
 app.delete('/work-orders/:id', async (req, res) => {
   try {
     console.log('🗑️ Eliminando orden de trabajo:', req.params.id);
@@ -1834,7 +2155,61 @@ app.delete('/work-orders/:id', async (req, res) => {
   }
 });
 
-// 🚀 START SERVER
+// � EXECUTE SQL - TEMPORARY ENDPOINT FOR UPDATING FUNCTIONS
+app.post('/execute-sql', async (req, res) => {
+  try {
+    console.log('🔧 Ejecutando SQL personalizado');
+
+    const { query } = req.body;
+
+    if (!query) {
+      return res.status(400).json({
+        success: false,
+        message: 'Query SQL requerido'
+      });
+    }
+
+    console.log('🔧 Query a ejecutar:', query);
+
+    // Try to execute the query directly
+    const response = await supabaseClient.post('', {
+      query: query
+    }, {
+      headers: {
+        'Content-Type': 'application/json',
+        'Prefer': 'return=representation'
+      }
+    });
+
+    console.log('🔧 Respuesta de ejecución SQL:', response.status);
+
+    res.header('Access-Control-Allow-Origin', '*');
+    res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE, OPTIONS');
+    res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization');
+
+    res.json({
+      success: true,
+      message: 'SQL ejecutado exitosamente',
+      data: response.data
+    });
+
+  } catch (error) {
+    console.error('❌ Error ejecutando SQL:', error.message);
+
+    res.header('Access-Control-Allow-Origin', '*');
+    res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE, OPTIONS');
+    res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization');
+
+    res.status(500).json({
+      success: false,
+      message: 'Error ejecutando SQL',
+      error: error.message,
+      response: error.response?.data
+    });
+  }
+});
+
+// �🚀 START SERVER
 app.listen(PORT, () => {
   console.log('=======================================');
   console.log('🚀 SERVIDOR API COMPLETO FUNCIONANDO');

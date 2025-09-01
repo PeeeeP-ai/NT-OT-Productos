@@ -20,6 +20,7 @@ const WorkOrderDetails: React.FC<WorkOrderDetailsProps> = ({
   const [loading, setLoading] = useState(false);
   const [updating, setUpdating] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [warnings, setWarnings] = useState<string[]>([]);
   const [showCompletionModal, setShowCompletionModal] = useState(false);
   const [completionData, setCompletionData] = useState<{
     [itemId: string]: {
@@ -59,14 +60,33 @@ const WorkOrderDetails: React.FC<WorkOrderDetailsProps> = ({
   const handleStatusChange = async (newStatus: WorkOrder['status']) => {
     try {
       setUpdating(true);
+      setError(null);
+      setWarnings([]);
+
       const result = await updateWorkOrderStatus(workOrder.id, newStatus);
 
       if (result.success) {
+        // Clear any previous warnings/errors
+        setWarnings([]);
+
+        // Check if there are warnings in the response
+        if (result.warnings && result.warnings.length > 0) {
+          setWarnings(result.warnings);
+        }
+
         // Recargar detalles
         await loadDetails();
         onUpdate?.();
       } else {
-        setError(result.message || 'Error al cambiar estado');
+        // Handle errors (shouldn't happen with new logic, but just in case)
+        if (result.errors && result.errors.length > 0) {
+          const errorMessage = result.errors.length === 1
+            ? result.errors[0]
+            : `${result.message}\n\nDetalles:\n${result.errors.join('\n')}`;
+          setError(errorMessage);
+        } else {
+          setError(result.message || 'Error al cambiar estado');
+        }
       }
     } catch (err) {
       setError('Error al cambiar estado');
@@ -215,6 +235,26 @@ const WorkOrderDetails: React.FC<WorkOrderDetailsProps> = ({
             </div>
           ) : details ? (
             <>
+              {/* Advertencias */}
+              {warnings.length > 0 && (
+                <div className="warnings-section">
+                  <div className="warning-banner">
+                    <h4>⚠️ Advertencias de Stock</h4>
+                    <ul>
+                      {warnings.map((warning, index) => (
+                        <li key={index}>{warning}</li>
+                      ))}
+                    </ul>
+                    <button
+                      onClick={() => setWarnings([])}
+                      className="dismiss-warning-button"
+                    >
+                      ×
+                    </button>
+                  </div>
+                </div>
+              )}
+
               {/* Información General */}
               <div className="details-section">
                 <h3>Información General</h3>
@@ -243,11 +283,11 @@ const WorkOrderDetails: React.FC<WorkOrderDetailsProps> = ({
                       )}
                       {details.status === 'in_progress' && (
                         <button
-                          onClick={() => setShowCompletionModal(true)}
+                          onClick={() => handleStatusChange('completed')}
                           className="status-action-button"
                           disabled={updating}
                         >
-                          {updating ? '...' : '✅ Completar con Consumo'}
+                          {updating ? '...' : 'completar'}
                         </button>
                       )}
                     </div>
@@ -305,9 +345,9 @@ const WorkOrderDetails: React.FC<WorkOrderDetailsProps> = ({
                 </div>
               </div>
 
-              {/* Productos a Producir */}
+              {/* Fórmulas */}
               <div className="details-section">
-                <h3>Productos a Producir</h3>
+                <h3>Fórmulas</h3>
                 {!(details as any).items || (details as any).items.length === 0 ? (
                   <p className="empty-message">No hay productos definidos</p>
                 ) : (

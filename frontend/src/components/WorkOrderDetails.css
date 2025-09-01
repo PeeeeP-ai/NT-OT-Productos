@@ -350,6 +350,8 @@
 
 .work-order-details-modal .error p {
   margin: 0 0 10px 0;
+  white-space: pre-line;
+  text-align: left;
 }
 
 .work-order-details-modal .retry-button {
@@ -375,6 +377,61 @@
 .work-order-details-modal .empty-state p {
   margin: 0;
   font-style: italic;
+}
+
+/* Warnings Section */
+.work-order-details-modal .warnings-section {
+  margin-bottom: 20px;
+}
+
+.work-order-details-modal .warning-banner {
+  background: #fff3cd;
+  border: 1px solid #ffeaa7;
+  border-radius: 6px;
+  padding: 16px;
+  position: relative;
+  border-left: 4px solid #ffc107;
+}
+
+.work-order-details-modal .warning-banner h4 {
+  margin: 0 0 12px 0;
+  color: #856404;
+  font-size: 1rem;
+  font-weight: 600;
+}
+
+.work-order-details-modal .warning-banner ul {
+  margin: 0;
+  padding-left: 20px;
+  color: #856404;
+}
+
+.work-order-details-modal .warning-banner li {
+  margin-bottom: 4px;
+  line-height: 1.4;
+}
+
+.work-order-details-modal .dismiss-warning-button {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  background: none;
+  border: none;
+  font-size: 18px;
+  color: #856404;
+  cursor: pointer;
+  padding: 4px;
+  border-radius: 50%;
+  width: 24px;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background-color 0.2s;
+}
+
+.work-order-details-modal .dismiss-warning-button:hover {
+  background: rgba(133, 100, 4, 0.1);
 }
 
 /* Responsive */

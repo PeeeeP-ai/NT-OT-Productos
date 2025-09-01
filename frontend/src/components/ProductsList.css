@@ -181,79 +181,64 @@
 
 /* Acciones de la tarjeta */
 .product-card .card-actions {
-  padding: 15px 20px;
-  border-top: 1px solid #e1e8ed;
   display: flex;
-  justify-content: center;
-  gap: 10px;
-  background: #f8f9fa;
+  justify-content: flex-end;
+  gap: 8px;
+  padding-top: 15px;
+  border-top: 1px solid #e1e8ed;
 }
 
 .action-btn {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 36px;
-  height: 36px;
+  padding: 8px 12px;
   border: none;
-  border-radius: 8px;
+  border-radius: 5px;
   cursor: pointer;
-  transition: all 0.2s ease;
+  transition: background-color 0.2s ease;
   font-size: 14px;
-  color: white;
+  color: #666;
+  background: transparent;
 }
 
 .action-btn:hover {
   transform: translateY(-1px);
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
-}
-
-.action-btn.view {
-  background-color: #3498db;
+  background-color: #f5f5f5;
 }
 
 .action-btn.view:hover {
-  background-color: #2980b9;
-}
-
-.action-btn.formula {
-  background-color: #9b59b6;
+  background-color: #f5f5f5;
 }
 
 .action-btn.formula:hover {
-  background-color: #8e44ad;
-}
-
-.action-btn.edit {
-  background-color: #f39c12;
+  background-color: #f5f5f5;
 }
 
 .action-btn.edit:hover {
-  background-color: #e67e22;
+  background-color: #f5f5f5;
 }
 
 .action-btn.warning {
-  background-color: #e74c3c;
+  color: #f59e0b;
 }
 
 .action-btn.warning:hover {
-  background-color: #c0392b;
+  background-color: #fef3c7;
 }
 
 .action-btn.success {
-  background-color: #27ae60;
+  color: #10b981;
 }
 
 .action-btn.success:hover {
-  background-color: #229954;
+  background-color: #ecfdf5;
 }
 
 .action-btn.danger {
-  background-color: #e74c3c;
+  color: #ef4444;
 }
 
 .action-btn.danger:hover {
-  background-color: #c0392b;
+  background-color: #fef2f2;
 }
 
 /* Estado vacío */
@@ -350,8 +335,13 @@
   }
 
   .product-card .card-actions {
-    justify-content: space-around;
     flex-wrap: wrap;
+    gap: 6px;
+  }
+
+  .action-btn {
+    padding: 6px 10px;
+    font-size: 12px;
   }
 }
 
@@ -367,8 +357,7 @@
   }
 
   .action-btn {
-    width: 32px;
-    height: 32px;
+    padding: 6px 8px;
     font-size: 12px;
   }
 }/* 
@@ -376,8 +365,8 @@ Loading spinner para botones */
 .loading-spinner {
   width: 14px;
   height: 14px;
-  border: 2px solid rgba(255, 255, 255, 0.3);
-  border-top: 2px solid white;
+  border: 2px solid rgba(102, 102, 102, 0.3);
+  border-top: 2px solid #666;
   border-radius: 50%;
   animation: spin 1s linear infinite;
 }

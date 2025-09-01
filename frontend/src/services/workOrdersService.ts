@@ -133,11 +133,21 @@ export const updateWorkOrderStatus = async (
   try {
     const response: AxiosResponse<WorkOrderApiResponse> = await apiClient.patch(`/work-orders/${id}/status`, { status });
     return response.data;
-  } catch (error) {
+  } catch (error: any) {
     console.error('Error cambiando estado de orden de trabajo:', error);
+
+    // Handle specific stock-related errors
+    if (error.response?.data?.errors && Array.isArray(error.response.data.errors)) {
+      return {
+        success: false,
+        message: error.response.data.message || 'Error al cambiar estado de orden de trabajo',
+        errors: error.response.data.errors
+      };
+    }
+
     return {
       success: false,
-      message: 'Error al cambiar estado de orden de trabajo',
+      message: error.response?.data?.message || 'Error al cambiar estado de orden de trabajo',
       errors: [error instanceof Error ? error.message : 'Error desconocido']
     };
   }

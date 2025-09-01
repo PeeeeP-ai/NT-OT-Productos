@@ -107,7 +107,7 @@ const ProductsList: React.FC<ProductsListProps> = ({
   if (loading) {
     return (
       <div className="loading-container">
-        <div className="loading">Cargando productos...</div>
+        <div className="loading">Cargando fórmulas...</div>
       </div>
     );
   }
@@ -115,11 +115,11 @@ const ProductsList: React.FC<ProductsListProps> = ({
   return (
     <div className="products-list">
       <div className="header">
-        <h1>Productos</h1>
+        <h1>Fórmulas</h1>
         <div className="controls">
           <input
             type="text"
-            placeholder="Buscar productos..."
+            placeholder="Buscar fórmulas..."
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
             className="search-input"
@@ -138,9 +138,9 @@ const ProductsList: React.FC<ProductsListProps> = ({
       <div className="products-grid">
         {filteredProducts.length === 0 ? (
           <div className="empty-state">
-            <p>No se encontraron productos</p>
+            <p>No se encontraron fórmulas</p>
             <p className="empty-subtitle">
-              {searchTerm ? 'Intenta con otros términos de búsqueda' : 'Crea tu primer producto para comenzar'}
+              {searchTerm ? 'Intenta con otros términos de búsqueda' : 'Crea tu primera fórmula para comenzar'}
             </p>
           </div>
         ) : (

@@ -103,19 +103,34 @@ CREATE OR REPLACE FUNCTION generate_work_order_number()
 RETURNS VARCHAR(50) AS $$
 DECLARE
   current_year INTEGER;
+  current_month INTEGER;
   sequence_number INTEGER;
   result_order_number VARCHAR(50);
+  year_month_pattern VARCHAR(20);
 BEGIN
+  -- Usar la fecha actual para determinar el año-mes
   current_year := EXTRACT(YEAR FROM NOW());
+  current_month := EXTRACT(MONTH FROM NOW());
+  year_month_pattern := 'OT-' || current_year || '-' || LPAD(current_month::TEXT, 2, '0') || '-%';
 
-  -- Obtener el último número de secuencia para el año actual
-  SELECT COALESCE(MAX(CAST(SUBSTRING(work_orders.order_number FROM '[0-9]+$') AS INTEGER)), 0) + 1
+  -- Obtener el último número de secuencia para el año-mes actual
+  -- Manejar tanto el formato antiguo (OT-YYYY-XXXX) como el nuevo (OT-YYYY-MM-XXX)
+  SELECT COALESCE(MAX(
+    CASE
+      WHEN work_orders.order_number LIKE 'OT-' || current_year || '-' || LPAD(current_month::TEXT, 2, '0') || '-%' THEN
+        CAST(SUBSTRING(work_orders.order_number FROM '[0-9]{3}$') AS INTEGER)
+      WHEN work_orders.order_number LIKE 'OT-' || current_year || '-%' AND work_orders.order_number NOT LIKE 'OT-' || current_year || '-' || LPAD(current_month::TEXT, 2, '0') || '-%' THEN
+        -- Para formato antiguo, extraer los últimos 4 dígitos
+        CAST(SUBSTRING(work_orders.order_number FROM '[0-9]{4}$') AS INTEGER)
+      ELSE 0
+    END
+  ), 0) + 1
   INTO sequence_number
   FROM work_orders
   WHERE work_orders.order_number LIKE 'OT-' || current_year || '-%';
 
-  -- Generar el número de orden
-  result_order_number := 'OT-' || current_year || '-' || LPAD(sequence_number::TEXT, 4, '0');
+  -- Generar el número de orden con formato OT-YYYY-MM-001
+  result_order_number := 'OT-' || current_year || '-' || LPAD(current_month::TEXT, 2, '0') || '-' || LPAD(sequence_number::TEXT, 3, '0');
 
   RETURN result_order_number;
 END;
@@ -262,5 +277,43 @@ BEGIN
   JOIN products p ON pf.product_id = p.id
   JOIN raw_materials rm ON pf.raw_material_id = rm.id
   WHERE pf.product_id = p_product_id;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Función para generar número de orden basado en fecha planificada
+CREATE OR REPLACE FUNCTION generate_work_order_number_for_date(
+  p_planned_start_date DATE
+)
+RETURNS VARCHAR(50) AS $$
+DECLARE
+  target_year INTEGER;
+  target_month INTEGER;
+  sequence_number INTEGER;
+  result_order_number VARCHAR(50);
+BEGIN
+  -- Usar la fecha planificada para determinar el año-mes
+  target_year := EXTRACT(YEAR FROM p_planned_start_date);
+  target_month := EXTRACT(MONTH FROM p_planned_start_date);
+
+  -- Obtener el último número de secuencia para el año-mes de la fecha planificada
+  -- Manejar tanto el formato antiguo (OT-YYYY-XXXX) como el nuevo (OT-YYYY-MM-XXX)
+  SELECT COALESCE(MAX(
+    CASE
+      WHEN work_orders.order_number LIKE 'OT-' || target_year || '-' || LPAD(target_month::TEXT, 2, '0') || '-%' THEN
+        CAST(SUBSTRING(work_orders.order_number FROM '[0-9]{3}$') AS INTEGER)
+      WHEN work_orders.order_number LIKE 'OT-' || target_year || '-%' AND work_orders.order_number NOT LIKE 'OT-' || target_year || '-' || LPAD(target_month::TEXT, 2, '0') || '-%' THEN
+        -- Para formato antiguo, extraer los últimos 4 dígitos
+        CAST(SUBSTRING(work_orders.order_number FROM '[0-9]{4}$') AS INTEGER)
+      ELSE 0
+    END
+  ), 0) + 1
+  INTO sequence_number
+  FROM work_orders
+  WHERE work_orders.order_number LIKE 'OT-' || target_year || '-%';
+
+  -- Generar el número de orden con formato OT-YYYY-MM-001
+  result_order_number := 'OT-' || target_year || '-' || LPAD(target_month::TEXT, 2, '0') || '-' || LPAD(sequence_number::TEXT, 3, '0');
+
+  RETURN result_order_number;
 END;
 $$ LANGUAGE plpgsql;

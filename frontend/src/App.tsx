@@ -206,7 +206,7 @@ function App() {
                 className={`nav-button ${currentSection === 'products' ? 'active' : ''}`}
                 onClick={() => setCurrentSection('products')}
               >
-                🏭 Productos
+                🧪 Fórmulas
               </button>
               <button
                 className={`nav-button ${currentSection === 'workorders' ? 'active' : ''}`}
@@ -224,7 +224,7 @@ function App() {
             )}
             {currentSection === 'products' && (
               <button onClick={handleCreateProduct} className="create-button">
-                ➕ Nuevo Producto
+                ➕ Nueva Fórmula
               </button>
             )}
             {currentSection === 'workorders' && (

@@ -1635,13 +1635,22 @@ $app->post('/work-orders', function ($request, $response, $args) use ($supabase_
             return $response->withJson($data, 400);
         }
 
-        // Generar número de orden
-        $order_number_query = "select generate_work_order_number() as order_number";
+        // Generar número de orden basado en la fecha planificada de inicio
+        $planned_start_date = $validation['data']['planned_start_date'] ?? date('Y-m-d');
+        $current_date = date('Y-m-d'); // Use PHP's date which respects the server timezone
+
+        // If no planned start date or it's in the past, use current date for numbering
+        $date_for_numbering = $planned_start_date;
+        if (empty($planned_start_date) || strtotime($planned_start_date) < time()) {
+            $date_for_numbering = $current_date;
+        }
+
+        $order_number_query = "select generate_work_order_number_for_date('{$date_for_numbering}') as order_number";
         $order_number_response = $supabase_client->post('rpc/exec', [
             'json' => ['query' => $order_number_query]
         ]);
         $order_number_result = json_decode($order_number_response->getBody(), true);
-        $order_number = $order_number_result[0]['order_number'] ?? 'OT-' . date('Y') . '-0001';
+        $order_number = $order_number_result[0]['order_number'] ?? 'OT-' . date('Y-m-d', strtotime($date_for_numbering)) . '-001';
 
         // Crear la orden de trabajo
         $work_order_data = [
@@ -1969,7 +1978,12 @@ $app->patch('/work-orders/{id}/status', function ($request, $response, $args) us
         $input_data = json_decode($request->getBody()->getContents(), true);
         $new_status = $input_data['status'] ?? null;
 
+        echo "🔄 [STATUS_CHANGE_START] Starting status change for work order: {$id}\n";
+        echo "🔄 [STATUS_CHANGE_START] New status requested: {$new_status}\n";
+        echo "🔄 [STATUS_CHANGE_START] Input data: " . print_r($input_data, true) . "\n";
+
         if (!$new_status || !in_array($new_status, ['pending', 'in_progress', 'completed', 'cancelled'])) {
+            echo "❌ [STATUS_CHANGE_START] Invalid status: {$new_status}\n";
             $data = [
                 'success' => false,
                 'message' => 'Estado inválido. Debe ser: pending, in_progress, completed o cancelled'
@@ -1977,19 +1991,8 @@ $app->patch('/work-orders/{id}/status', function ($request, $response, $args) us
             return $response->withJson($data, 400);
         }
 
+        echo "📊 [STATUS_CHANGE] Starting status change processing...\n";
         echo "📊 Cambiando estado de OT {$id} a {$new_status}\n";
-
-        $dataToUpdate = [
-            'status' => $new_status,
-            'updated_at' => date('Y-m-d\TH:i:s\Z')
-        ];
-
-        // Actualizar fechas según el estado
-        if ($new_status === 'in_progress') {
-            $dataToUpdate['actual_start_date'] = date('Y-m-d\TH:i:s\Z');
-        } elseif ($new_status === 'completed') {
-            $dataToUpdate['actual_end_date'] = date('Y-m-d\TH:i:s\Z');
-        }
 
         // Verificar que la OT existe
         $check_response = $supabase_client->get("work_orders?id=eq.{$id}");
@@ -2003,6 +2006,305 @@ $app->patch('/work-orders/{id}/status', function ($request, $response, $args) us
             return $response->withJson($data, 404);
         }
 
+        $current_work_order = $check_data[0];
+        $current_status = $current_work_order['status'];
+
+        echo "📊 [STATUS_CHECK] Current status in database: {$current_status}\n";
+        echo "📊 [STATUS_CHECK] Requested new status: {$new_status}\n";
+        echo "📊 [STATUS_CHECK] Work order data: " . print_r($current_work_order, true) . "\n";
+
+        // Si estamos cambiando de pending a in_progress, deducir stock de materias primas
+        // O si ya está en in_progress pero no se ha deducido stock aún
+        $should_deduct_stock = false;
+        $consumptions = [];
+
+        if ($current_status === 'pending' && $new_status === 'in_progress') {
+            echo "✅ [STATUS_CHECK] Condition met: changing from pending to in_progress\n";
+            $should_deduct_stock = true;
+        } elseif ($current_status === 'in_progress' && $new_status === 'in_progress') {
+            echo "🔄 [STATUS_CHECK] Work order already in progress - checking if stock needs to be deducted\n";
+
+            // Obtener consumo planificado de la OT para verificar si ya se dedujo stock
+            $consumption_query = "select * from get_work_order_details('{$id}') where consumption_planned > 0";
+            try {
+                $consumption_response = $supabase_client->post('rpc/exec', [
+                    'json' => ['query' => $consumption_query]
+                ]);
+                $consumptions = json_decode($consumption_response->getBody(), true);
+
+                if (json_last_error() !== JSON_ERROR_NONE) {
+                    $consumptions = [];
+                }
+            } catch (Exception $e) {
+                $consumptions = [];
+            }
+
+            if (!empty($consumptions)) {
+                // Verificar si ya se dedujo stock consultando inventory_entries
+                $material_ids = array_map(function($c) { return "'{$c['formula_raw_material_id']}'"; }, $consumptions);
+                $existing_entries_response = $supabase_client->get("inventory_entries?raw_material_id=in.(" . implode(',', $material_ids) . ")&notes=ilike.%OT {$current_work_order['order_number']}%");
+                $existing_entries = json_decode($existing_entries_response->getBody(), true);
+
+                if (empty($existing_entries)) {
+                    echo "⚠️ [STATUS_CHECK] No stock deduction found for this work order - will deduct now\n";
+                    $should_deduct_stock = true;
+                } else {
+                    echo "✅ [STATUS_CHECK] Stock already deducted for this work order - skipping\n";
+                    $should_deduct_stock = false;
+                }
+            } else {
+                echo "⚠️ [STATUS_CHECK] No consumptions found for this work order\n";
+                $should_deduct_stock = false;
+            }
+        }
+
+        if ($should_deduct_stock) {
+            echo "📊 [STATUS_CHANGE] Iniciando OT - deducir stock de materias primas\n";
+            echo "📊 [STATUS_CHANGE] Work Order ID: {$id}\n";
+            echo "📊 [STATUS_CHANGE] Current status: {$current_status} -> New status: {$new_status}\n";
+
+            // Obtener consumo planificado de la OT usando la función SQL
+            $consumption_query = "select * from get_work_order_details('{$id}') where consumption_planned > 0";
+            echo "📊 [STATUS_CHANGE] Query de consumo: {$consumption_query}\n";
+
+            try {
+                echo "📊 [STATUS_CHANGE] Ejecutando RPC call...\n";
+                $consumption_response = $supabase_client->post('rpc/exec', [
+                    'json' => ['query' => $consumption_query]
+                ]);
+
+                echo "📊 [STATUS_CHANGE] RPC Response status: " . $consumption_response->getStatusCode() . "\n";
+                $response_body = $consumption_response->getBody()->getContents();
+                echo "📊 [STATUS_CHANGE] RPC Raw response length: " . strlen($response_body) . " bytes\n";
+                echo "📊 [STATUS_CHANGE] RPC Raw response: {$response_body}\n";
+
+                $consumptions = json_decode($response_body, true);
+
+                if (json_last_error() !== JSON_ERROR_NONE) {
+                    echo "❌ [STATUS_CHANGE] JSON decode error: " . json_last_error_msg() . "\n";
+                    $consumptions = [];
+                }
+
+                echo "📊 [STATUS_CHANGE] Consumos encontrados: " . count($consumptions) . "\n";
+
+                if (!empty($consumptions)) {
+                    echo "📊 [STATUS_CHANGE] Primer consumo: " . print_r($consumptions[0], true) . "\n";
+                    echo "📊 [STATUS_CHANGE] Todos los consumos:\n";
+                    foreach ($consumptions as $index => $consumption) {
+                        echo "📊 [STATUS_CHANGE] Consumo {$index}: " . print_r($consumption, true) . "\n";
+                    }
+                } else {
+                    echo "⚠️ [STATUS_CHANGE] No se encontraron consumos planificados\n";
+                }
+            } catch (Exception $e) {
+                echo "❌ [STATUS_CHANGE] Error en RPC call: " . $e->getMessage() . "\n";
+                echo "❌ [STATUS_CHANGE] Exception details: " . print_r($e, true) . "\n";
+                $consumptions = [];
+            }
+
+            // LOG: Verificar si hay consumos para procesar
+            echo "🔍 [LOG_CONSUMPTION] Total consumptions to process: " . count($consumptions) . "\n";
+            if (empty($consumptions)) {
+                echo "⚠️ [LOG_CONSUMPTION] No consumptions found - stock deduction will be skipped\n";
+            }
+
+            $warnings = [];
+
+            if (!empty($consumptions)) {
+                // Agrupar consumos por materia prima para evitar duplicados
+                $consumptions_by_material = [];
+                foreach ($consumptions as $consumption) {
+                    $raw_material_id = $consumption['formula_raw_material_id'];
+                    if (!isset($consumptions_by_material[$raw_material_id])) {
+                        $consumptions_by_material[$raw_material_id] = [
+                            'raw_material_id' => $raw_material_id,
+                            'raw_material_name' => $consumption['raw_material_name'],
+                            'planned_consumption' => 0,
+                            'unit' => $consumption['raw_material_unit']
+                        ];
+                    }
+                    $consumptions_by_material[$raw_material_id]['planned_consumption'] += $consumption['consumption_planned'];
+                }
+
+                echo "📊 [DEBUG] Consumos agrupados: " . count($consumptions_by_material) . "\n";
+
+                $warnings = [];
+                $insufficient_stock = [];
+
+                // Verificar disponibilidad de stock para todas las materias primas
+                foreach ($consumptions_by_material as $consumption) {
+                    $raw_material_id = $consumption['raw_material_id'];
+                    $planned_consumption = $consumption['planned_consumption'];
+
+                    echo "🔍 [STOCK_CHECK] Verificando stock para material ID: {$raw_material_id}\n";
+                    echo "🔍 [STOCK_CHECK] Consumo planificado requerido: {$planned_consumption}\n";
+
+                    // Obtener stock actual de la materia prima
+                    $stock_response = $supabase_client->get("raw_materials?id=eq.{$raw_material_id}&select=id,name,current_stock,unit");
+                    $stock_data = json_decode($stock_response->getBody(), true);
+
+                    echo "🔍 [STOCK_CHECK] Stock response status: " . $stock_response->getStatusCode() . "\n";
+                    echo "🔍 [STOCK_CHECK] Stock data: " . print_r($stock_data, true) . "\n";
+
+                    if (!empty($stock_data)) {
+                        $material = $stock_data[0];
+                        $current_stock = $material['current_stock'];
+
+                        echo "🔍 [STOCK_CHECK] Material: {$material['name']}, Stock actual: {$current_stock} {$material['unit']}\n";
+
+                        if ($current_stock < $planned_consumption) {
+                            echo "⚠️ [STOCK_CHECK] STOCK INSUFICIENTE: {$material['name']} - Disponible: {$current_stock}, Requerido: {$planned_consumption}\n";
+                            $insufficient_stock[] = [
+                                'name' => $material['name'],
+                                'available' => $current_stock,
+                                'required' => $planned_consumption,
+                                'unit' => $material['unit']
+                            ];
+                        } else {
+                            echo "✅ [STOCK_CHECK] Stock suficiente: {$material['name']} - Disponible: {$current_stock}, Requerido: {$planned_consumption}\n";
+                        }
+                    } else {
+                        echo "❌ [STOCK_CHECK] No se pudo obtener datos de stock para material ID: {$raw_material_id}\n";
+                    }
+                }
+
+                // Registrar advertencias por stock insuficiente
+                if (!empty($insufficient_stock)) {
+                    foreach ($insufficient_stock as $item) {
+                        $warnings[] = "Advertencia: Stock insuficiente de '{$item['name']}': disponible {$item['available']} {$item['unit']}, requerido {$item['required']} {$item['unit']}";
+                    }
+                }
+
+                // Deducir stock de todas las materias primas (permitir stock negativo si es necesario)
+                foreach ($consumptions_by_material as $consumption) {
+                    $raw_material_id = $consumption['raw_material_id'];
+                    $planned_consumption = $consumption['planned_consumption'];
+                    $material_name = $consumption['raw_material_name'];
+
+                    echo "📊 [STATUS_CHANGE] Procesando material: {$material_name} (ID: {$raw_material_id})\n";
+                    echo "📊 [STATUS_CHANGE] Consumo planificado: {$planned_consumption}\n";
+
+                    // Obtener stock actual
+                    echo "📊 [STATUS_CHANGE] Obteniendo stock actual para {$raw_material_id}...\n";
+                    $stock_response = $supabase_client->get("raw_materials?id=eq.{$raw_material_id}&select=current_stock");
+                    $stock_data = json_decode($stock_response->getBody(), true);
+
+                    echo "📊 [STATUS_CHANGE] Stock response status: " . $stock_response->getStatusCode() . "\n";
+                    echo "📊 [STATUS_CHANGE] Stock data: " . print_r($stock_data, true) . "\n";
+
+                    if (!empty($stock_data)) {
+                        $current_stock = $stock_data[0]['current_stock'];
+                        $new_stock = $current_stock - $planned_consumption;
+
+                        echo "📊 [STATUS_CHANGE] Stock actual: {$current_stock}, Nuevo stock: {$new_stock}\n";
+
+                        // Actualizar stock de la materia prima (permitir negativo)
+                        $stock_update = [
+                            'current_stock' => $new_stock,
+                            'updated_at' => date('Y-m-d\TH:i:s\Z')
+                        ];
+
+                        echo "📊 [STOCK_UPDATE] Actualizando stock para {$material_name} (ID: {$raw_material_id})\n";
+                        echo "📊 [STOCK_UPDATE] Datos de actualización: " . print_r($stock_update, true) . "\n";
+                        echo "📊 [STOCK_UPDATE] Stock anterior: {$current_stock}, Nuevo stock: {$new_stock}, Diferencia: -{$planned_consumption}\n";
+
+                        $update_response = $supabase_client->patch("raw_materials?id=eq.{$raw_material_id}", [
+                            'json' => $stock_update
+                        ]);
+
+                        echo "📊 [STOCK_UPDATE] Stock update response status: " . $update_response->getStatusCode() . "\n";
+
+                        if ($update_response->getStatusCode() >= 200 && $update_response->getStatusCode() < 300) {
+                            echo "✅ [STOCK_UPDATE] Stock actualizado exitosamente: {$material_name} -> {$new_stock} (deducido: {$planned_consumption})\n";
+
+                            // Verificar que el stock se actualizó correctamente
+                            $verify_response = $supabase_client->get("raw_materials?id=eq.{$raw_material_id}&select=current_stock");
+                            $verify_data = json_decode($verify_response->getBody(), true);
+                            if (!empty($verify_data)) {
+                                $verified_stock = $verify_data[0]['current_stock'];
+                                echo "🔍 [STOCK_VERIFY] Verificación de stock: esperado {$new_stock}, actual en BD {$verified_stock}\n";
+                                if ($verified_stock == $new_stock) {
+                                    echo "✅ [STOCK_VERIFY] Stock verificado correctamente\n";
+                                } else {
+                                    echo "❌ [STOCK_VERIFY] ERROR: Stock no coincide - esperado {$new_stock}, actual {$verified_stock}\n";
+                                }
+                            }
+                        } else {
+                            echo "❌ [STOCK_UPDATE] ERROR al actualizar stock para {$material_name}\n";
+                            $error_body = $update_response->getBody()->getContents();
+                            echo "❌ [STOCK_UPDATE] Error response: {$error_body}\n";
+                        }
+
+                        // Registrar movimiento de salida en inventory_entries
+                        $movement_data = [
+                            'raw_material_id' => $raw_material_id,
+                            'quantity' => $planned_consumption,
+                            'entry_type' => 'out',
+                            'notes' => "{$current_work_order['order_number']} - {$material_name}",
+                            'movement_date' => date('Y-m-d\TH:i:s\Z')
+                        ];
+
+                        echo "📊 [INVENTORY_ENTRY] Creando entrada de inventario para {$material_name}\n";
+                        echo "📊 [INVENTORY_ENTRY] Datos del movimiento: " . print_r($movement_data, true) . "\n";
+
+                        $inventory_response = $supabase_client->post('inventory_entries', [
+                            'json' => $movement_data
+                        ]);
+
+                        echo "📊 [INVENTORY_ENTRY] Response status: " . $inventory_response->getStatusCode() . "\n";
+
+                        if ($inventory_response->getStatusCode() >= 200 && $inventory_response->getStatusCode() < 300) {
+                            $inventory_response_body = $inventory_response->getBody()->getContents();
+                            echo "📊 [INVENTORY_ENTRY] Response body: {$inventory_response_body}\n";
+
+                            $created_entry = json_decode($inventory_response_body, true);
+                            if (!empty($created_entry) && isset($created_entry[0]['id'])) {
+                                echo "✅ [INVENTORY_ENTRY] Movimiento registrado exitosamente - ID: {$created_entry[0]['id']}\n";
+                                echo "✅ [INVENTORY_ENTRY] Movimiento: {$material_name} - Cantidad: {$planned_consumption} - Tipo: out\n";
+                            } else {
+                                echo "⚠️ [INVENTORY_ENTRY] Movimiento creado pero no se pudo obtener el ID\n";
+                            }
+                        } else {
+                            echo "❌ [INVENTORY_ENTRY] ERROR al crear entrada de inventario para {$material_name}\n";
+                            $error_body = $inventory_response->getBody()->getContents();
+                            echo "❌ [INVENTORY_ENTRY] Error response: {$error_body}\n";
+                        }
+                    } else {
+                        echo "❌ [STATUS_CHANGE] No se pudo obtener stock para material {$raw_material_id}\n";
+                    }
+                }
+
+                echo "✅ Todos los stocks deducidos exitosamente\n";
+            } else {
+                echo "⚠️ No se encontró consumo planificado para la OT\n";
+            }
+
+            // LOG FINAL: Resumen del proceso de cambio de estado
+            echo "🎯 [STATUS_CHANGE_SUMMARY] Resumen del cambio de estado OT {$id}\n";
+            echo "🎯 [STATUS_CHANGE_SUMMARY] Estado anterior: {$current_status}\n";
+            echo "🎯 [STATUS_CHANGE_SUMMARY] Estado nuevo: {$new_status}\n";
+            echo "🎯 [STATUS_CHANGE_SUMMARY] Consumos procesados: " . count($consumptions_by_material ?? []) . "\n";
+            echo "🎯 [STATUS_CHANGE_SUMMARY] Advertencias: " . count($warnings ?? []) . "\n";
+            if (!empty($warnings)) {
+                foreach ($warnings as $warning) {
+                    echo "🎯 [STATUS_CHANGE_SUMMARY] ⚠️ {$warning}\n";
+                }
+            }
+            echo "🎯 [STATUS_CHANGE_SUMMARY] Proceso completado exitosamente\n";
+        }
+
+        $dataToUpdate = [
+            'status' => $new_status,
+            'updated_at' => date('Y-m-d\TH:i:s\Z')
+        ];
+
+        // Actualizar fechas según el estado
+        if ($new_status === 'in_progress') {
+            $dataToUpdate['actual_start_date'] = date('Y-m-d\TH:i:s\Z');
+        } elseif ($new_status === 'completed') {
+            $dataToUpdate['actual_end_date'] = date('Y-m-d\TH:i:s\Z');
+        }
+
         $api_response = $supabase_client->patch("work_orders?id=eq.{$id}", [
             'json' => $dataToUpdate
         ]);
@@ -2014,6 +2316,12 @@ $app->patch('/work-orders/{id}/status', function ($request, $response, $args) us
             'message' => 'Estado de orden de trabajo actualizado exitosamente',
             'data' => $updated_work_order[0]
         ];
+
+        // Incluir advertencias en la respuesta si las hay
+        if (!empty($warnings)) {
+            $data['warnings'] = $warnings;
+            $data['message'] .= ' (con advertencias de stock)';
+        }
 
         return $response->withJson($data);
 

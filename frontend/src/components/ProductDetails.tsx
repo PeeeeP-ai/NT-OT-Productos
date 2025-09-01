@@ -43,7 +43,7 @@ const ProductDetails: React.FC<ProductDetailsProps> = ({
       setRawMaterials(rawMaterialsData);
     } catch (error) {
       console.error('Error loading product data:', error);
-      alert('Error al cargar los datos del producto');
+      alert('Error al cargar los datos de la fórmula');
     } finally {
       setLoading(false);
     }
@@ -150,7 +150,7 @@ const ProductDetails: React.FC<ProductDetailsProps> = ({
                 onClick={() => setShowEditForm(true)}
                 disabled={loading}
               >
-                ✏️ Editar Producto
+                ✏️ Editar Fórmula
               </button>
               <button 
                 className="modal-close-btn"
@@ -250,14 +250,14 @@ const ProductDetails: React.FC<ProductDetailsProps> = ({
             {loading ? (
               <div className="loading-container">
                 <div className="loading-spinner"></div>
-                <p>Cargando detalles del producto...</p>
+                <p>Cargando detalles de la fórmula...</p>
               </div>
             ) : (
               <>
                 {/* Sección de fórmula */}
                 <div className="formula-section">
                   <div className="section-header">
-                    <h3>Fórmula del Producto</h3>
+                    <h3>Fórmula</h3>
                     <button
                       className="btn btn-primary"
                       onClick={() => setShowFormulaModal(true)}
@@ -271,7 +271,7 @@ const ProductDetails: React.FC<ProductDetailsProps> = ({
                       <div className="empty-state">
                         <span className="empty-icon">📝</span>
                         <h4>Sin Fórmula Definida</h4>
-                        <p>Este producto aún no tiene una fórmula con ingredientes.</p>
+                        <p>Esta fórmula aún no tiene ingredientes definidos.</p>
                         <button
                           className="btn btn-primary"
                           onClick={() => setShowFormulaModal(true)}

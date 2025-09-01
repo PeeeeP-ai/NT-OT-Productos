@@ -90,7 +90,7 @@ export interface ProductWithFormula extends Product {
   formula: ProductFormula[];
 }
 
-// Tipos para formularios de productos
+// Tipos para formularios de fórmulas
 export interface ProductFormData {
   name: string;
   description?: string;
@@ -117,14 +117,14 @@ export interface ProductWithCalculations extends ProductWithFormula {
   limiting_material?: RawMaterial;
 }
 
-// Tipos para respuestas específicas de API de productos
+// Tipos para respuestas específicas de API de fórmulas
 export interface ProductApiResponse extends ApiResponse<Product> {}
 export interface ProductsApiResponse extends ApiResponse<Product[]> {}
 export interface ProductFormulaApiResponse extends ApiResponse<ProductFormula> {}
 export interface ProductFormulasApiResponse extends ApiResponse<ProductFormula[]> {}
 export interface ProductWithFormulaApiResponse extends ApiResponse<ProductWithFormula> {}
 
-// Enums y constantes para productos
+// Enums y constantes para fórmulas
 export const PRODUCT_UNITS = [
   'unidad',
   'kg',
@@ -236,7 +236,9 @@ export interface WorkOrderItemFormData {
 }
 
 // Tipos para respuestas específicas de API de OT
-export interface WorkOrderApiResponse extends ApiResponse<WorkOrder> {}
+export interface WorkOrderApiResponse extends ApiResponse<WorkOrder> {
+  warnings?: string[];
+}
 export interface WorkOrdersApiResponse extends ApiResponse<WorkOrder[]> {}
 export interface WorkOrderWithItemsApiResponse extends ApiResponse<WorkOrderWithItems> {}
 export interface WorkOrderDetailsApiResponse extends ApiResponse<WorkOrderDetails> {}

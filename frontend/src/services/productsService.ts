@@ -23,7 +23,7 @@ export const productsService = {
   // MÉTODOS CRUD PARA PRODUCTOS
   // =========================================
 
-  // Obtener todos los productos
+  // Obtener todas las fórmulas
   async getAll(showInactive: boolean = false): Promise<Product[]> {
     try {
       const params = new URLSearchParams();

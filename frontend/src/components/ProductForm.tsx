@@ -144,11 +144,11 @@ const ProductForm: React.FC<ProductFormProps> = ({
     <div className="modal-overlay">
       <div className="modal-content">
         <div className="modal-header">
-          <h2>{isEdit ? 'Editar Producto' : 'Nuevo Producto'}</h2>
-          <button 
-            type="button" 
-            onClick={handleClose} 
-            className="close-button" 
+          <h2>{isEdit ? 'Editar Fórmula' : 'Nueva Fórmula'}</h2>
+          <button
+            type="button"
+            onClick={handleClose}
+            className="close-button"
             aria-label="Cerrar"
             disabled={loading}
           >
@@ -165,7 +165,7 @@ const ProductForm: React.FC<ProductFormProps> = ({
 
           <div className="form-row">
             <div className="form-group">
-              <label htmlFor="name">Nombre del Producto *</label>
+              <label htmlFor="name">Nombre de la Fórmula *</label>
               <input
                 type="text"
                 id="name"
@@ -270,7 +270,7 @@ const ProductForm: React.FC<ProductFormProps> = ({
                   {isEdit ? 'Actualizando...' : 'Creando...'}
                 </>
               ) : (
-                isEdit ? 'Actualizar Producto' : 'Crear Producto'
+                isEdit ? 'Actualizar Fórmula' : 'Crear Fórmula'
               )}
             </button>
           </div>
