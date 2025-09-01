@@ -10,6 +10,34 @@ const apiClient = axios.create({
   },
 });
 
+// Cache simple para evitar llamadas repetidas
+const cache = new Map<string, { data: any; timestamp: number }>();
+const CACHE_DURATION = 30000; // 30 segundos
+
+const getCachedData = (key: string) => {
+  const cached = cache.get(key);
+  if (cached && Date.now() - cached.timestamp < CACHE_DURATION) {
+    return cached.data;
+  }
+  return null;
+};
+
+const setCachedData = (key: string, data: any) => {
+  cache.set(key, { data, timestamp: Date.now() });
+};
+
+const clearCache = (pattern?: string) => {
+  if (pattern) {
+    for (const key of cache.keys()) {
+      if (key.includes(pattern)) {
+        cache.delete(key);
+      }
+    }
+  } else {
+    cache.clear();
+  }
+};
+
 // Servicio para Materias Primas
 export const rawMaterialsService = {
   // Obtener todas las materias primas
@@ -97,11 +125,18 @@ export const rawMaterialsService = {
   },
 
   // Obtener entradas de inventario de una materia prima
-  async getEntries(materialId: string, type?: 'in' | 'out'): Promise<InventoryEntry[]> {
+  async getEntries(materialId: string, type?: 'in' | 'out', limit: number = 100): Promise<InventoryEntry[]> {
     try {
+      const cacheKey = `entries-${materialId}-${type || 'all'}-${limit}`;
+      const cached = getCachedData(cacheKey);
+      if (cached) {
+        console.log('🔍 Usando datos en cache para:', materialId);
+        return cached;
+      }
+
       const params = new URLSearchParams();
       params.append('order', 'movement_date.desc');
-      params.append('limit', '10000');
+      params.append('limit', limit.toString());
       if (type) {
         params.append('type', type);
       }
@@ -110,7 +145,10 @@ export const rawMaterialsService = {
       const response: AxiosResponse<ApiResponse<InventoryEntry[]>> = await apiClient.get(
         `/raw-materials/${materialId}/entries?${params}`
       );
-      return response.data.success ? response.data.data || [] : [];
+      const data = response.data.success ? response.data.data || [] : [];
+      
+      setCachedData(cacheKey, data);
+      return data;
     } catch (error) {
       console.error('Error fetching inventory entries:', error);
       throw error;
@@ -127,6 +165,14 @@ export const rawMaterialsService = {
       if (!response.data.success) {
         throw new Error(response.data.message || 'Error creando entrada de inventario');
       }
+      
+      // Limpiar cache relacionado con este material
+      clearCache(`entries-${materialId}`);
+      
+      // También notificar que se debe limpiar el cache de stocks
+      // (esto se puede hacer mediante un evento personalizado)
+      window.dispatchEvent(new CustomEvent('stocksChanged', { detail: { materialId } }));
+      
       return response.data.data!;
     } catch (error) {
       console.error('Error creating inventory entry:', error);

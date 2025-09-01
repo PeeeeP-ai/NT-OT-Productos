@@ -165,6 +165,9 @@ export interface WorkOrder {
   priority: 'low' | 'normal' | 'high' | 'urgent';
   planned_start_date?: string;
   planned_end_date?: string;
+  actual_start_datetime?: string;
+  actual_end_datetime?: string;
+  // Keep old fields for backward compatibility
   actual_start_date?: string;
   actual_end_date?: string;
   notes?: string;

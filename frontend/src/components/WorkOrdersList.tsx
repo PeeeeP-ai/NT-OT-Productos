@@ -1,9 +1,124 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, memo } from 'react';
 import { WorkOrder } from '../types';
 import { getWorkOrders, getStatusColor, getPriorityColor, formatWorkOrderNumber } from '../services/workOrdersService';
 import './WorkOrdersList.css';
 
 type ViewMode = 'cards' | 'grid';
+
+// Componente memoizado para las tarjetas de órdenes de trabajo
+const WorkOrderCard = memo(({ 
+  workOrder, 
+  onViewDetails, 
+  onEdit, 
+  onDelete,
+  formatDate,
+  getStatusLabel,
+  getPriorityLabel
+}: {
+  workOrder: WorkOrder;
+  onViewDetails?: (workOrder: WorkOrder) => void;
+  onEdit?: (workOrder: WorkOrder) => void;
+  onDelete?: (workOrder: WorkOrder) => void;
+  formatDate: (dateString: string | undefined, isActualDate?: boolean) => string;
+  getStatusLabel: (status: WorkOrder['status']) => string;
+  getPriorityLabel: (priority: WorkOrder['priority']) => string;
+}) => (
+  <div className="work-order-card">
+    <div className="card-header">
+      <div className="order-info">
+        <h3>{formatWorkOrderNumber(workOrder.order_number)}</h3>
+        <span className="created-date">
+          {formatDate(workOrder.created_at)}
+        </span>
+      </div>
+      <div className="status-badges">
+        <span
+          className="status-badge"
+          style={{ backgroundColor: getStatusColor(workOrder.status) }}
+        >
+          {getStatusLabel(workOrder.status)}
+        </span>
+        <span
+          className="priority-badge"
+          style={{ backgroundColor: getPriorityColor(workOrder.priority) }}
+        >
+          {getPriorityLabel(workOrder.priority)}
+        </span>
+      </div>
+    </div>
+
+    <div className="card-content">
+      {workOrder.description && (
+        <p className="description">{workOrder.description}</p>
+      )}
+
+      <div className="dates-info">
+        {workOrder.planned_start_date && (
+          <div className="date-item">
+            <span className="label">Inicio planificado:</span>
+            <span>{formatDate(workOrder.planned_start_date)}</span>
+          </div>
+        )}
+        {workOrder.planned_end_date && (
+          <div className="date-item">
+            <span className="label">Fin planificado:</span>
+            <span>{formatDate(workOrder.planned_end_date)}</span>
+          </div>
+        )}
+        {(workOrder.actual_start_datetime || workOrder.actual_start_date) && (
+          <div className="date-item">
+            <span className="label">Inicio real:</span>
+            <span>{formatDate(workOrder.actual_start_datetime || workOrder.actual_start_date, true)}</span>
+          </div>
+        )}
+        {(workOrder.actual_end_datetime || workOrder.actual_end_date) && (
+          <div className="date-item">
+            <span className="label">Fin real:</span>
+            <span>{formatDate(workOrder.actual_end_datetime || workOrder.actual_end_date, true)}</span>
+          </div>
+        )}
+      </div>
+
+      {workOrder.notes && (
+        <div className="notes">
+          <span className="label">Notas:</span>
+          <p>{workOrder.notes}</p>
+        </div>
+      )}
+    </div>
+
+    <div className="card-actions">
+      {onViewDetails && (
+        <button
+          onClick={() => onViewDetails(workOrder)}
+          className="action-button view-button"
+        >
+          👁️ Ver Detalles
+        </button>
+      )}
+      {onEdit && (workOrder.status === 'pending' || workOrder.status === 'cancelled') && (
+        <button
+          onClick={() => onEdit(workOrder)}
+          className="action-button edit-button"
+        >
+          ✏️ Editar
+        </button>
+      )}
+      {onDelete && (workOrder.status === 'pending' || workOrder.status === 'cancelled') && (
+        <button
+          onClick={() => {
+            if (window.confirm(`¿Estás seguro de que deseas eliminar la orden de trabajo ${formatWorkOrderNumber(workOrder.order_number)}? Esta acción no se puede deshacer.`)) {
+              onDelete(workOrder);
+            }
+          }}
+          className="action-button delete-button"
+        >
+          🗑️ Eliminar
+        </button>
+      )}
+    </div>
+  </div>
+));
 
 interface WorkOrdersListProps {
   onCreate?: () => void;
@@ -13,7 +128,7 @@ interface WorkOrdersListProps {
   forceRefresh?: number;
 }
 
-const WorkOrdersList: React.FC<WorkOrdersListProps> = ({
+const WorkOrdersList: React.FC<WorkOrdersListProps> = memo(({
   onCreate,
   onViewDetails,
   onEdit,
@@ -28,7 +143,7 @@ const WorkOrdersList: React.FC<WorkOrdersListProps> = ({
   const [sortField, setSortField] = useState<string>('created_at');
   const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('desc');
 
-  const loadWorkOrders = async () => {
+  const loadWorkOrders = useCallback(async () => {
     try {
       setLoading(true);
       setError(null);
@@ -36,6 +151,11 @@ const WorkOrdersList: React.FC<WorkOrdersListProps> = ({
       const result = await getWorkOrders(statusFilter || undefined);
 
       if (result.success && result.data) {
+        console.log('🔍 WorkOrdersList - Datos recibidos del servidor:', result.data);
+        if (result.data.length > 0) {
+          console.log('🔍 Primer elemento - actual_start_datetime:', result.data[0].actual_start_datetime);
+          console.log('🔍 Primer elemento - actual_start_date:', result.data[0].actual_start_date);
+        }
         setWorkOrders(result.data);
       } else {
         setError(result.message || 'Error al cargar órdenes de trabajo');
@@ -46,41 +166,58 @@ const WorkOrdersList: React.FC<WorkOrdersListProps> = ({
     } finally {
       setLoading(false);
     }
-  };
+  }, [statusFilter]);
 
   useEffect(() => {
     loadWorkOrders();
-  }, [statusFilter, forceRefresh]);
+  }, [loadWorkOrders, forceRefresh]);
 
-  const formatDate = (dateString: string | undefined) => {
+  const formatDate = useCallback((dateString: string | undefined, isActualDate: boolean = false) => {
     if (!dateString) return '-';
 
-    // Handle different date formats that might come from the database
-    let date: Date;
+    try {
+      // Handle different date formats that might come from the database
+      let date: Date;
 
-    // If it's already a valid date string in YYYY-MM-DD format, parse it without timezone
-    if (typeof dateString === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(dateString)) {
-      // Parse as local date to avoid timezone shifts
-      const [year, month, day] = dateString.split('-').map(Number);
-      date = new Date(year, month - 1, day); // month is 0-indexed
-    } else {
-      // Fallback for other date formats
-      date = new Date(dateString);
-    }
+      // If it's a datetime string (contains 'T'), parse it directly
+      if (typeof dateString === 'string' && dateString.includes('T')) {
+        // Parse the ISO string directly - JavaScript handles timezone conversion automatically
+        date = new Date(dateString);
+      } else if (typeof dateString === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(dateString)) {
+        // Parse as local date to avoid timezone shifts
+        const [year, month, day] = dateString.split('-').map(Number);
+        date = new Date(year, month - 1, day); // month is 0-indexed
+      } else {
+        // Fallback for other date formats
+        date = new Date(dateString);
+      }
 
-    if (isNaN(date.getTime())) {
+      if (isNaN(date.getTime())) {
+        console.warn('Invalid date string:', dateString);
+        return '-';
+      }
+
+      // Format manually to avoid timezone issues
+      const day = String(date.getDate()).padStart(2, '0');
+      const month = String(date.getMonth() + 1).padStart(2, '0');
+      const year = date.getFullYear();
+
+      // For actual dates (with time), show time as well
+      if (isActualDate || (dateString && dateString.includes('T'))) {
+        const hours = String(date.getHours()).padStart(2, '0');
+        const minutes = String(date.getMinutes()).padStart(2, '0');
+        return `${day}/${month}/${year}, ${hours}:${minutes}`;
+      }
+
+      // For planned dates or date-only strings, show only date
+      return `${day}/${month}/${year}`;
+    } catch (error) {
+      console.error('Error formatting date:', dateString, error);
       return '-';
     }
+  }, []);
 
-    // Format manually to avoid timezone issues
-    const day = String(date.getDate()).padStart(2, '0');
-    const month = String(date.getMonth() + 1).padStart(2, '0');
-    const year = date.getFullYear();
-
-    return `${day}/${month}/${year}`;
-  };
-
-  const getStatusLabel = (status: WorkOrder['status']) => {
+  const getStatusLabel = useCallback((status: WorkOrder['status']) => {
     const labels = {
       pending: 'Pendiente',
       in_progress: 'En Progreso',
@@ -88,9 +225,9 @@ const WorkOrdersList: React.FC<WorkOrdersListProps> = ({
       cancelled: 'Cancelada'
     };
     return labels[status] || status;
-  };
+  }, []);
 
-  const getPriorityLabel = (priority: WorkOrder['priority']) => {
+  const getPriorityLabel = useCallback((priority: WorkOrder['priority']) => {
     const labels = {
       low: 'Baja',
       normal: 'Normal',
@@ -98,7 +235,7 @@ const WorkOrdersList: React.FC<WorkOrdersListProps> = ({
       urgent: 'Urgente'
     };
     return labels[priority] || priority;
-  };
+  }, []);
 
   const handleSort = (field: string) => {
     if (sortField === field) {
@@ -109,7 +246,7 @@ const WorkOrdersList: React.FC<WorkOrdersListProps> = ({
     }
   };
 
-  const getSortedWorkOrders = () => {
+  const getSortedWorkOrders = useMemo(() => {
     return [...workOrders].sort((a, b) => {
       let aValue: any = a[sortField as keyof WorkOrder];
       let bValue: any = b[sortField as keyof WorkOrder];
@@ -135,7 +272,7 @@ const WorkOrdersList: React.FC<WorkOrdersListProps> = ({
       if (aValue > bValue) return sortDirection === 'asc' ? 1 : -1;
       return 0;
     });
-  };
+  }, [workOrders, sortField, sortDirection]);
 
   if (loading) {
     return (
@@ -218,106 +355,18 @@ const WorkOrdersList: React.FC<WorkOrdersListProps> = ({
         </div>
       ) : viewMode === 'cards' ? (
         <div className="work-orders-grid">
-          {getSortedWorkOrders().map((workOrder) => {
-            console.log('Work order:', workOrder.id, 'Status:', workOrder.status);
-            return (
-              <div key={workOrder.id} className="work-order-card">
-              <div className="card-header">
-                <div className="order-info">
-                  <h3>{formatWorkOrderNumber(workOrder.order_number)}</h3>
-                  <span className="created-date">
-                    {formatDate(workOrder.created_at)}
-                  </span>
-                </div>
-                <div className="status-badges">
-                  <span
-                    className="status-badge"
-                    style={{ backgroundColor: getStatusColor(workOrder.status) }}
-                  >
-                    {getStatusLabel(workOrder.status)}
-                  </span>
-                  <span
-                    className="priority-badge"
-                    style={{ backgroundColor: getPriorityColor(workOrder.priority) }}
-                  >
-                    {getPriorityLabel(workOrder.priority)}
-                  </span>
-                </div>
-              </div>
-
-              <div className="card-content">
-                {workOrder.description && (
-                  <p className="description">{workOrder.description}</p>
-                )}
-
-                <div className="dates-info">
-                  {workOrder.planned_start_date && (
-                    <div className="date-item">
-                      <span className="label">Inicio planificado:</span>
-                      <span>{formatDate(workOrder.planned_start_date)}</span>
-                    </div>
-                  )}
-                  {workOrder.planned_end_date && (
-                    <div className="date-item">
-                      <span className="label">Fin planificado:</span>
-                      <span>{formatDate(workOrder.planned_end_date)}</span>
-                    </div>
-                  )}
-                  {workOrder.actual_start_date && (
-                    <div className="date-item">
-                      <span className="label">Inicio real:</span>
-                      <span>{formatDate(workOrder.actual_start_date)}</span>
-                    </div>
-                  )}
-                  {workOrder.actual_end_date && (
-                    <div className="date-item">
-                      <span className="label">Fin real:</span>
-                      <span>{formatDate(workOrder.actual_end_date)}</span>
-                    </div>
-                  )}
-                </div>
-
-                {workOrder.notes && (
-                  <div className="notes">
-                    <span className="label">Notas:</span>
-                    <p>{workOrder.notes}</p>
-                  </div>
-                )}
-              </div>
-
-              <div className="card-actions">
-                {onViewDetails && (
-                  <button
-                    onClick={() => onViewDetails(workOrder)}
-                    className="action-button view-button"
-                  >
-                    👁️ Ver Detalles
-                  </button>
-                )}
-                {onEdit && (workOrder.status === 'pending' || workOrder.status === 'cancelled') && (
-                  <button
-                    onClick={() => onEdit(workOrder)}
-                    className="action-button edit-button"
-                  >
-                    ✏️ Editar
-                  </button>
-                )}
-                {onDelete && (workOrder.status === 'pending' || workOrder.status === 'cancelled') && (
-                  <button
-                    onClick={() => {
-                      if (window.confirm(`¿Estás seguro de que deseas eliminar la orden de trabajo ${formatWorkOrderNumber(workOrder.order_number)}? Esta acción no se puede deshacer.`)) {
-                        onDelete(workOrder);
-                      }
-                    }}
-                    className="action-button delete-button"
-                  >
-                    🗑️ Eliminar
-                  </button>
-                )}
-              </div>
-            </div>
-            );
-          })}
+          {getSortedWorkOrders.map((workOrder) => (
+            <WorkOrderCard
+              key={workOrder.id}
+              workOrder={workOrder}
+              onViewDetails={onViewDetails}
+              onEdit={onEdit}
+              onDelete={onDelete}
+              formatDate={formatDate}
+              getStatusLabel={getStatusLabel}
+              getPriorityLabel={getPriorityLabel}
+            />
+          ))}
         </div>
       ) : (
         <div className="work-orders-table-container">
@@ -351,7 +400,7 @@ const WorkOrdersList: React.FC<WorkOrdersListProps> = ({
                 </tr>
               </thead>
               <tbody>
-                {getSortedWorkOrders().map((workOrder) => (
+                {getSortedWorkOrders.map((workOrder) => (
                   <tr key={workOrder.id}>
                     <td className="order-number">{formatWorkOrderNumber(workOrder.order_number)}</td>
                     <td>
@@ -375,8 +424,8 @@ const WorkOrdersList: React.FC<WorkOrdersListProps> = ({
                     </td>
                     <td>{formatDate(workOrder.planned_start_date)}</td>
                     <td>{formatDate(workOrder.planned_end_date)}</td>
-                    <td>{formatDate(workOrder.actual_start_date)}</td>
-                    <td>{formatDate(workOrder.actual_end_date)}</td>
+                    <td>{formatDate(workOrder.actual_start_datetime || workOrder.actual_start_date, true)}</td>
+                    <td>{formatDate(workOrder.actual_end_datetime || workOrder.actual_end_date, true)}</td>
                     <td className="actions-cell">
                       {onViewDetails && (
                         <button
@@ -419,6 +468,8 @@ const WorkOrdersList: React.FC<WorkOrdersListProps> = ({
       )}
     </div>
   );
-};
+});
+
+WorkOrdersList.displayName = 'WorkOrdersList';
 
 export default WorkOrdersList;

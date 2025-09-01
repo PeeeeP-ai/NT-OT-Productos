@@ -1,67 +1,33 @@
--- Function to generate work order number for current date
-CREATE OR REPLACE FUNCTION generate_work_order_number()
-RETURNS VARCHAR(50) AS $$
-DECLARE
-  current_year INTEGER;
-  current_month INTEGER;
-  sequence_number INTEGER;
-  result_order_number VARCHAR(50);
-  max_existing INTEGER;
-BEGIN
-  -- Use current date (this will use the database's timezone setting)
-  -- For Santiago timezone, we need to ensure the database is set correctly
-  current_year := EXTRACT(YEAR FROM CURRENT_DATE);
-  current_month := EXTRACT(MONTH FROM CURRENT_DATE);
+-- Migration to add TIMESTAMPTZ fields for actual_start_date and actual_end_date in work_orders table
+-- This allows storing both date and time information for work order start and end times
 
-  -- Only look for orders with the NEW format (OT-YYYY-MM-XXX) for this specific month
-  -- This ensures we don't get confused by old format orders
-  SELECT COALESCE(MAX(CAST(SUBSTRING(order_number FROM '[0-9]{3}$') AS INTEGER)), 0)
-  INTO max_existing
-  FROM work_orders
-  WHERE order_number LIKE 'OT-' || current_year || '-' || LPAD(current_month::TEXT, 2, '0') || '-%'
-    AND order_number ~ '^OT-[0-9]{4}-[0-9]{2}-[0-9]{3}$'  -- Exact format match
-    AND LENGTH(order_number) = 14; -- OT-YYYY-MM-XXX = 14 characters
+-- Add new TIMESTAMPTZ columns
+ALTER TABLE work_orders ADD COLUMN IF NOT EXISTS actual_start_datetime TIMESTAMPTZ;
+ALTER TABLE work_orders ADD COLUMN IF NOT EXISTS actual_end_datetime TIMESTAMPTZ;
 
-  -- Increment the sequence (if no orders found, max_existing will be 0, so we start with 1)
-  sequence_number := max_existing + 1;
+-- Copy existing DATE values to the new TIMESTAMPTZ columns (assuming they represent start/end of day)
+-- Only copy if the new columns are empty and old columns have values
+UPDATE work_orders
+SET
+  actual_start_datetime = CASE
+    WHEN actual_start_datetime IS NULL AND actual_start_date IS NOT NULL
+    THEN actual_start_date::TIMESTAMPTZ
+    ELSE actual_start_datetime
+  END,
+  actual_end_datetime = CASE
+    WHEN actual_end_datetime IS NULL AND actual_end_date IS NOT NULL
+    THEN actual_end_date::TIMESTAMPTZ
+    ELSE actual_end_datetime
+  END;
 
-  -- Generate the order number with format OT-YYYY-MM-001
-  result_order_number := 'OT-' || current_year || '-' || LPAD(current_month::TEXT, 2, '0') || '-' || LPAD(sequence_number::TEXT, 3, '0');
+-- Update the get_work_order_details function to return the new datetime fields
+-- This function is used by the backend to get detailed work order information
 
-  RETURN result_order_number;
-END;
-$$ LANGUAGE plpgsql;
+-- Note: The function definition has been updated in the migration file 004_create_work_orders_tables.sql
+-- If you need to apply this separately, you can run the updated function definition from that file.
 
--- Function to generate work order number for a specific date
-CREATE OR REPLACE FUNCTION generate_work_order_number_for_date(
-  p_planned_start_date DATE
-)
-RETURNS VARCHAR(50) AS $$
-DECLARE
-  target_year INTEGER;
-  target_month INTEGER;
-  sequence_number INTEGER;
-  result_order_number VARCHAR(50);
-  max_existing INTEGER;
-BEGIN
-  target_year := EXTRACT(YEAR FROM p_planned_start_date);
-  target_month := EXTRACT(MONTH FROM p_planned_start_date);
+-- Optional: You can drop the old DATE columns after confirming everything works
+-- ALTER TABLE work_orders DROP COLUMN IF EXISTS actual_start_date;
+-- ALTER TABLE work_orders DROP COLUMN IF EXISTS actual_end_date;
 
-  -- Only look for orders with the NEW format (OT-YYYY-MM-XXX) for this specific month
-  -- This ensures we don't get confused by old format orders
-  SELECT COALESCE(MAX(CAST(SUBSTRING(order_number FROM '[0-9]{3}$') AS INTEGER)), 0)
-  INTO max_existing
-  FROM work_orders
-  WHERE order_number LIKE 'OT-' || target_year || '-' || LPAD(target_month::TEXT, 2, '0') || '-%'
-    AND order_number ~ '^OT-[0-9]{4}-[0-9]{2}-[0-9]{3}$'  -- Exact format match
-    AND LENGTH(order_number) = 14; -- OT-YYYY-MM-XXX = 14 characters
-
-  -- Increment the sequence (if no orders found, max_existing will be 0, so we start with 1)
-  sequence_number := max_existing + 1;
-
-  -- Generate the order number with format OT-YYYY-MM-001
-  result_order_number := 'OT-' || target_year || '-' || LPAD(target_month::TEXT, 2, '0') || '-' || LPAD(sequence_number::TEXT, 3, '0');
-
-  RETURN result_order_number;
-END;
-$$ LANGUAGE plpgsql;
+-- But for now, we'll keep them for backward compatibility as mentioned in the migration

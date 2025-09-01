@@ -62,7 +62,7 @@ const WorkOrderForm: React.FC<WorkOrderFormProps> = ({
 
       if (result.success && result.data) {
 
-        // Función helper para formatear fechas de manera robusta (sin timezone)
+        // Función helper para formatear fechas de manera robusta para date input (planned dates)
         const formatDateForInput = (dateString: string | null | undefined): string => {
           if (!dateString) return '';
           try {
@@ -71,12 +71,17 @@ const WorkOrderForm: React.FC<WorkOrderFormProps> = ({
               return dateString;
             }
 
-            // Handle Date objects and date strings, ignoring timezone
+            // If it's a datetime string, extract just the date part
+            if (typeof dateString === 'string' && dateString.includes('T')) {
+              return dateString.split('T')[0];
+            }
+
+            // Handle Date objects and other date strings
             let dateObj: Date;
 
             if (typeof dateString === 'string') {
-              // Parse date string, assuming it's in YYYY-MM-DD format or ISO format
-              dateObj = new Date(dateString + (dateString.includes('T') ? '' : 'T00:00:00'));
+              // Parse date string, assuming it's in ISO format or other standard format
+              dateObj = new Date(dateString);
             } else {
               return '';
             }

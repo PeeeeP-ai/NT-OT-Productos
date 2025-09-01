@@ -240,16 +240,15 @@ function App() {
       <main className="main-content">
         {currentSection === 'materials' && (
           <RawMaterialsList
-            key={`materials-${forceRefreshMaterials}`}
             onEdit={handleEditMaterial}
             onViewEntries={handleViewEntries}
             onCreateEntry={handleCreateEntry}
+            forceRefresh={forceRefreshMaterials}
           />
         )}
         
         {currentSection === 'products' && (
           <ProductsList
-            key={`products-${forceRefreshProducts}`}
             onEdit={handleEditProduct}
             onViewDetails={handleViewProductDetails}
             onCreate={handleCreateProduct}
@@ -259,7 +258,6 @@ function App() {
 
         {currentSection === 'workorders' && (
           <WorkOrdersList
-            key={`workorders-${forceRefreshWorkOrders}`}
             onCreate={handleCreateWorkOrder}
             onViewDetails={handleViewWorkOrderDetails}
             onEdit={handleEditWorkOrder}

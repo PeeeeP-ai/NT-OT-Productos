@@ -1890,6 +1890,17 @@ app.patch('/work-orders/:id/status', async (req, res) => {
         // Agrupar consumos por materia prima para evitar duplicados
         consumptions.forEach(consumption => {
           const rawMaterialId = consumption.formula_raw_material_id;
+          
+          // Skip consumptions with null or invalid material ID
+          if (!rawMaterialId || rawMaterialId === 'null' || !consumption.consumption_planned || consumption.consumption_planned <= 0) {
+            console.log('⚠️ [CONSUMPTION_FILTER] Skipping invalid consumption:', {
+              rawMaterialId,
+              consumption_planned: consumption.consumption_planned,
+              raw_material_name: consumption.raw_material_name
+            });
+            return;
+          }
+          
           if (!consumptionsByMaterial[rawMaterialId]) {
             consumptionsByMaterial[rawMaterialId] = {
               raw_material_id: rawMaterialId,
@@ -1907,6 +1918,12 @@ app.patch('/work-orders/:id/status', async (req, res) => {
 
         // Verificar disponibilidad de stock para todas las materias primas
         for (const materialId in consumptionsByMaterial) {
+          // Skip invalid material IDs
+          if (!materialId || materialId === 'null' || materialId === 'undefined') {
+            console.log('⚠️ [STOCK_CHECK] Skipping invalid material ID:', materialId);
+            continue;
+          }
+          
           const consumption = consumptionsByMaterial[materialId];
           const plannedConsumption = consumption.planned_consumption;
 
@@ -1951,6 +1968,12 @@ app.patch('/work-orders/:id/status', async (req, res) => {
 
         // Deducir stock de todas las materias primas (permitir stock negativo si es necesario)
         for (const materialId in consumptionsByMaterial) {
+          // Skip invalid material IDs
+          if (!materialId || materialId === 'null' || materialId === 'undefined') {
+            console.log('⚠️ [STOCK_DEDUCTION] Skipping invalid material ID:', materialId);
+            continue;
+          }
+          
           const consumption = consumptionsByMaterial[materialId];
           const plannedConsumption = consumption.planned_consumption;
           const materialName = consumption.raw_material_name;
@@ -2067,12 +2090,20 @@ app.patch('/work-orders/:id/status', async (req, res) => {
       updated_at: new Date().toISOString()
     };
 
-    // Actualizar fechas según el estado
+    // Actualizar fechas según el estado con timestamp completo
     if (new_status === 'in_progress') {
-      updates.actual_start_date = new Date().toISOString();
+      const now = new Date().toISOString();
+      updates.actual_start_datetime = now;
+      updates.actual_start_date = now; // Keep full timestamp for backward compatibility
+
     } else if (new_status === 'completed') {
-      updates.actual_end_date = new Date().toISOString();
+      const now = new Date().toISOString();
+      updates.actual_end_datetime = now;
+      updates.actual_end_date = now; // Keep full timestamp for backward compatibility
+      console.log('📅 [DATE_UPDATE] Setting actual_end_datetime:', now);
     }
+
+    console.log('📅 [DATE_UPDATE] Final updates object:', JSON.stringify(updates, null, 2));
 
     const response = await supabaseClient.patch(`work_orders?id=eq.${workOrderId}`, updates);
 

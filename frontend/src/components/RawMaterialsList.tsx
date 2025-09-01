@@ -1,19 +1,46 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useCallback, memo, useRef } from 'react';
 import { RawMaterial, InventoryEntry } from '../types';
 import { rawMaterialsService } from '../services/rawMaterialsService';
+import { useDebounce } from '../hooks/useDebounce';
 import { FaRegEdit, FaRegTrashAlt, FaPowerOff, FaPlus, FaEye } from 'react-icons/fa';
 import './RawMaterialsList.css';
+
+// Cache global para stocks calculados
+const stocksCache = new Map<string, { stock: number; timestamp: number }>();
+const STOCKS_CACHE_DURATION = 60000; // 1 minuto
+
+const getCachedStock = (materialId: string) => {
+  const cached = stocksCache.get(materialId);
+  if (cached && Date.now() - cached.timestamp < STOCKS_CACHE_DURATION) {
+    return cached.stock;
+  }
+  return null;
+};
+
+const setCachedStock = (materialId: string, stock: number) => {
+  stocksCache.set(materialId, { stock, timestamp: Date.now() });
+};
+
+const clearStocksCache = (materialId?: string) => {
+  if (materialId) {
+    stocksCache.delete(materialId);
+  } else {
+    stocksCache.clear();
+  }
+};
 
 interface RawMaterialsListProps {
   onEdit: (material: RawMaterial) => void;
   onViewEntries: (material: RawMaterial) => void;
   onCreateEntry: (material: RawMaterial) => void;
+  forceRefresh?: number;
 }
 
-const RawMaterialsList: React.FC<RawMaterialsListProps> = ({
+const RawMaterialsList: React.FC<RawMaterialsListProps> = memo(({
   onEdit,
   onViewEntries,
-  onCreateEntry
+  onCreateEntry,
+  forceRefresh
 }) => {
   const [materials, setMaterials] = useState<RawMaterial[]>([]);
   const [loading, setLoading] = useState(true);
@@ -21,12 +48,102 @@ const RawMaterialsList: React.FC<RawMaterialsListProps> = ({
   const [searchTerm, setSearchTerm] = useState('');
   const [calculatedStocks, setCalculatedStocks] = useState<{[key: string]: number}>({});
   const [stocksCalculated, setStocksCalculated] = useState(false);
+  
+  // Usar useRef para evitar recreaciones de callbacks
+  const isCalculatingRef = useRef(false);
+  
+  // Debounce search term para evitar filtrado excesivo
+  const debouncedSearchTerm = useDebounce(searchTerm, 300);
 
-  useEffect(() => {
-    loadMaterials();
-  }, [showInactive]);
+  // Declarar calculateStocksForMaterials primero
+  const calculateStocksForMaterials = useCallback(async (materials: RawMaterial[]) => {
+    if (isCalculatingRef.current) {
+      console.log('⏸️ Ya hay un cálculo en progreso, saltando...');
+      return;
+    }
 
-  const loadMaterials = async () => {
+    isCalculatingRef.current = true;
+    console.log('🔍 Calculando stocks para', materials.length, 'materiales...');
+
+    const newCalculatedStocks: {[key: string]: number} = {};
+    const materialsToCalculate: RawMaterial[] = [];
+
+    // Primero verificar cache
+    materials.forEach(material => {
+      const cachedStock = getCachedStock(material.id);
+      if (cachedStock !== null) {
+        newCalculatedStocks[material.id] = cachedStock;
+        console.log(`📋 Stock en cache para ${material.code}: ${cachedStock}`);
+      } else {
+        materialsToCalculate.push(material);
+      }
+    });
+
+    if (materialsToCalculate.length === 0) {
+      console.log('🎯 Todos los stocks están en cache');
+      setCalculatedStocks(newCalculatedStocks);
+      isCalculatingRef.current = false;
+      return;
+    }
+
+    console.log(`🔄 Calculando stocks para ${materialsToCalculate.length} materiales (${materials.length - materialsToCalculate.length} en cache)`);
+
+    try {
+      // Procesar en lotes de 3 para evitar sobrecarga del servidor
+      const batchSize = 3;
+      for (let i = 0; i < materialsToCalculate.length; i += batchSize) {
+        const batch = materialsToCalculate.slice(i, i + batchSize);
+        
+        const batchPromises = batch.map(async (material) => {
+          try {
+            console.log('📊 Cargando entradas para:', material.code);
+            const entries = await rawMaterialsService.getEntries(material.id);
+
+            // Calcular stock basado en entradas
+            let calculatedStock = 0;
+            entries.forEach((entry: InventoryEntry) => {
+              if (entry.entry_type === 'in') {
+                calculatedStock += entry.quantity;
+              } else {
+                calculatedStock -= entry.quantity;
+              }
+            });
+
+            const finalStock = Math.max(0, calculatedStock);
+            setCachedStock(material.id, finalStock);
+
+            return { materialId: material.id, stock: finalStock, entryCount: entries.length };
+          } catch (error) {
+            console.error(`❌ Error calculando stock para ${material.code}:`, error);
+            return { materialId: material.id, stock: material.current_stock, entryCount: 0 };
+          }
+        });
+
+        const batchResults = await Promise.all(batchPromises);
+        
+        batchResults.forEach(result => {
+          newCalculatedStocks[result.materialId] = result.stock;
+          console.log(`✅ ${result.materialId}: ${result.stock} unidades (${result.entryCount} entradas)`);
+        });
+
+        // Pequeña pausa entre lotes para no sobrecargar
+        if (i + batchSize < materialsToCalculate.length) {
+          await new Promise(resolve => setTimeout(resolve, 100));
+        }
+      }
+
+      setCalculatedStocks(newCalculatedStocks);
+      console.log('🎯 Stocks calculados completados:', newCalculatedStocks);
+
+    } catch (error) {
+      console.error('❌ Error general calculando stocks:', error);
+    } finally {
+      isCalculatingRef.current = false;
+    }
+  }, []); // Removemos isCalculating de las dependencias para evitar recreaciones
+
+  const loadMaterials = useCallback(async () => {
+    console.log('🔄 loadMaterials ejecutado - showInactive:', showInactive);
     try {
       setLoading(true);
       setStocksCalculated(false);
@@ -44,51 +161,40 @@ const RawMaterialsList: React.FC<RawMaterialsListProps> = ({
     } finally {
       setLoading(false);
     }
-  };
+  }, [showInactive, calculateStocksForMaterials]);
 
-  const calculateStocksForMaterials = async (materials: RawMaterial[]) => {
-    console.log('🔍 Calculando stocks para', materials.length, 'materiales...');
+  useEffect(() => {
+    console.log('🔄 useEffect[showInactive] ejecutado');
+    loadMaterials();
+  }, [loadMaterials]);
 
-    const newCalculatedStocks: {[key: string]: number} = {};
-
-    try {
-      // Calcular stock para cada material (en paralelo)
-      const stockPromises = materials.map(async (material) => {
-        try {
-          console.log('📊 Cargando entradas para:', material.code);
-          const entries = await rawMaterialsService.getEntries(material.id);
-
-          // Calcular stock basado en entradas
-          let calculatedStock = 0;
-          entries.forEach((entry: InventoryEntry) => {
-            if (entry.entry_type === 'in') {
-              calculatedStock += entry.quantity;
-            } else {
-              calculatedStock -= entry.quantity;
-            }
-          });
-
-          return { materialId: material.id, stock: Math.max(0, calculatedStock), entryCount: entries.length };
-        } catch (error) {
-          console.error(`❌ Error calculando stock para ${material.code}:`, error);
-          return { materialId: material.id, stock: material.current_stock, entryCount: 0 };
-        }
-      });
-
-      const results = await Promise.all(stockPromises);
-
-      results.forEach(result => {
-        newCalculatedStocks[result.materialId] = result.stock;
-        console.log(`✅ ${result.materialId}: ${result.stock} unidades (${result.entryCount} entradas)`);
-      });
-
-      setCalculatedStocks(newCalculatedStocks);
-      console.log('🎯 Stocks calculados completados:', newCalculatedStocks);
-
-    } catch (error) {
-      console.error('❌ Error general calculando stocks:', error);
+  // Efecto separado para forceRefresh para evitar re-mount completo
+  useEffect(() => {
+    if (forceRefresh && forceRefresh > 0) {
+      console.log('🔄 useEffect[forceRefresh] ejecutado - forceRefresh:', forceRefresh);
+      loadMaterials();
     }
-  };
+  }, [forceRefresh, loadMaterials]);
+
+  // Listener para cambios de stocks
+  useEffect(() => {
+    const handleStocksChanged = (event: CustomEvent) => {
+      const { materialId } = event.detail;
+      if (materialId) {
+        clearStocksCache(materialId);
+        // Recalcular solo este material si está en la lista actual
+        const material = materials.find(m => m.id === materialId);
+        if (material) {
+          calculateStocksForMaterials([material]);
+        }
+      }
+    };
+
+    window.addEventListener('stocksChanged', handleStocksChanged as EventListener);
+    return () => {
+      window.removeEventListener('stocksChanged', handleStocksChanged as EventListener);
+    };
+  }, [materials, calculateStocksForMaterials]);
 
   const getCurrentStock = useMemo(() => {
     return (material: RawMaterial) => {
@@ -129,9 +235,11 @@ const RawMaterialsList: React.FC<RawMaterialsListProps> = ({
 
 
 
-  const filteredMaterials = materials.filter(material =>
-    material.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    material.code.toLowerCase().includes(searchTerm.toLowerCase())
+  const filteredMaterials = useMemo(() => 
+    materials.filter(material =>
+      material.name.toLowerCase().includes(debouncedSearchTerm.toLowerCase()) ||
+      material.code.toLowerCase().includes(debouncedSearchTerm.toLowerCase())
+    ), [materials, debouncedSearchTerm]
   );
 
   const getStockStatus = useMemo(() => {
@@ -305,6 +413,8 @@ const RawMaterialsList: React.FC<RawMaterialsListProps> = ({
       </div>
     </div>
   );
-};
+});
+
+RawMaterialsList.displayName = 'RawMaterialsList';
 
 export default RawMaterialsList;

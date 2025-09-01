@@ -10,6 +10,9 @@ CREATE TABLE IF NOT EXISTS work_orders (
   priority VARCHAR(10) NOT NULL DEFAULT 'normal' CHECK (priority IN ('low', 'normal', 'high', 'urgent')),
   planned_start_date DATE,
   planned_end_date DATE,
+  actual_start_datetime TIMESTAMPTZ,
+  actual_end_datetime TIMESTAMPTZ,
+  -- Keep old fields for backward compatibility
   actual_start_date DATE,
   actual_end_date DATE,
   notes TEXT,
@@ -191,6 +194,9 @@ RETURNS TABLE (
   work_order_priority VARCHAR(10),
   planned_start_date DATE,
   planned_end_date DATE,
+  actual_start_datetime TIMESTAMPTZ,
+  actual_end_datetime TIMESTAMPTZ,
+  -- Keep old fields for backward compatibility
   actual_start_date DATE,
   actual_end_date DATE,
   work_order_created_at TIMESTAMPTZ,
@@ -220,6 +226,9 @@ BEGIN
     wo.priority as work_order_priority,
     wo.planned_start_date,
     wo.planned_end_date,
+    wo.actual_start_datetime,
+    wo.actual_end_datetime,
+    -- Keep old fields for backward compatibility
     wo.actual_start_date,
     wo.actual_end_date,
     wo.created_at as work_order_created_at,
