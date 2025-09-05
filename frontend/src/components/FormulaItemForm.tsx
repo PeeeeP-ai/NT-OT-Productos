@@ -21,7 +21,8 @@ const FormulaItemForm: React.FC<FormulaItemFormProps> = ({
 }) => {
   const [formData, setFormData] = useState<FormulaItemFormData>({
     raw_material_id: '',
-    quantity: 0
+    quantity: 0,
+    percentage: 0
   });
   
   const [errors, setErrors] = useState<{[key: string]: string}>({});
@@ -34,11 +35,33 @@ const FormulaItemForm: React.FC<FormulaItemFormProps> = ({
     } else {
       setFormData({
         raw_material_id: '', // Iniciar sin selección para forzar al usuario a elegir
-        quantity: 0
+        quantity: 0,
+        percentage: 0
       });
     }
     setErrors({});
-  }, [initialData, availableRawMaterials]);
+
+    // Auto-focus en el primer campo disponible después de que el formulario se renderice
+    setTimeout(() => {
+      // En modo edición usar el campo de cantidad, en modo creación usar el select de materia prima
+      let firstField: HTMLElement | null = null;
+
+      if (isEditing) {
+        // En edición, foco en el campo de cantidad
+        firstField = document.getElementById('quantity');
+      } else {
+        // En creación, foco en el select de materia prima
+        firstField = document.getElementById('raw_material_id');
+      }
+
+      if (firstField && firstField.offsetParent !== null) { // Verificar que esté visible
+        (firstField as HTMLInputElement | HTMLSelectElement).focus();
+        if (isEditing && 'select' in firstField) {
+          (firstField as HTMLInputElement).select(); // Seleccionar todo el contenido si es input
+        }
+      }
+    }, 300); // Delay para esperar que la animación del modal termine
+  }, [initialData, availableRawMaterials, isEditing]);
 
   // Manejar cambios en los campos
   const handleChange = (field: keyof FormulaItemFormData, value: string | number) => {
@@ -70,6 +93,13 @@ const FormulaItemForm: React.FC<FormulaItemFormProps> = ({
       newErrors.quantity = 'La cantidad es demasiado grande';
     }
 
+    // Validar porcentaje
+    if (formData.percentage < 0) {
+      newErrors.percentage = 'El porcentaje no puede ser negativo';
+    } else if (formData.percentage > 100) {
+      newErrors.percentage = 'El porcentaje no puede ser mayor al 100%';
+    }
+
     // Validar que la materia prima esté disponible
     const selectedMaterial = availableRawMaterials.find(rm => rm.id === formData.raw_material_id);
     if (!selectedMaterial) {
@@ -93,7 +123,8 @@ const FormulaItemForm: React.FC<FormulaItemFormProps> = ({
       
       const dataToSubmit: FormulaItemFormData = {
         raw_material_id: formData.raw_material_id,
-        quantity: Number(formData.quantity)
+        quantity: Number(formData.quantity),
+        percentage: Number(formData.percentage)
       };
 
       await onSubmit(dataToSubmit);
@@ -182,6 +213,34 @@ const FormulaItemForm: React.FC<FormulaItemFormProps> = ({
             {errors.quantity && (
               <span className="error-message">{errors.quantity}</span>
             )}
+          </div>
+
+          {/* Campo: Porcentaje */}
+          <div className="form-group full-width">
+            <label htmlFor="percentage" className="form-label">
+              Porcentaje del Producto
+            </label>
+            <div className="percentage-input-group">
+              <input
+                id="percentage"
+                type="number"
+                value={formData.percentage}
+                onChange={(e) => handleChange('percentage', parseFloat(e.target.value) || 0)}
+                className={`form-input ${errors.percentage ? 'error' : ''}`}
+                placeholder="0.00"
+                disabled={loading}
+                min="0"
+                max="100"
+                step="0.01"
+              />
+              <span className="unit-label">%</span>
+            </div>
+            {errors.percentage && (
+              <span className="error-message">{errors.percentage}</span>
+            )}
+            <div className="field-helper">
+              💡 Indica qué porcentaje del producto final representa este material.
+            </div>
           </div>
         </div>
 

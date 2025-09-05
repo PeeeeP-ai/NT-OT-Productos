@@ -152,10 +152,12 @@ const ProductDetails: React.FC<ProductDetailsProps> = ({
               >
                 ✏️ Editar Fórmula
               </button>
-              <button 
+              <button
                 className="modal-close-btn"
                 onClick={handleClose}
                 disabled={loading}
+                title="Cerrar"
+                aria-label="Cerrar"
               >
                 ✕
               </button>
@@ -199,7 +201,7 @@ const ProductDetails: React.FC<ProductDetailsProps> = ({
           {/* Estadísticas de producción */}
           <div className="production-stats">
             <h3>Estado de Producción</h3>
-            <div className="stats-grid">
+            <div className="stats-grid compact">
               <div className={`stat-card ${productionStats.hasFormula ? 'success' : 'warning'}`}>
                 <span className="stat-icon">{productionStats.hasFormula ? '📝' : '❓'}</span>
                 <div className="stat-content">
@@ -216,13 +218,6 @@ const ProductDetails: React.FC<ProductDetailsProps> = ({
                 </div>
               </div>
               
-              <div className={`stat-card ${productionStats.insufficientStock === 0 ? 'success' : 'warning'}`}>
-                <span className="stat-icon">{productionStats.insufficientStock === 0 ? '📦' : '⚠️'}</span>
-                <div className="stat-content">
-                  <span className="stat-number">{productionStats.insufficientStock}</span>
-                  <span className="stat-label">Stock Insuficiente</span>
-                </div>
-              </div>
               
               <div className={`stat-card ${productionStats.canProduce ? 'success' : 'info'}`}>
                 <span className="stat-icon">🏭</span>

@@ -1,0 +1,41 @@
+const fs = require('fs');
+const path = require('path');
+
+// Leer la migración
+const migrationPath = path.join(__dirname, 'supabase-migrations', '007_fix_product_analyses_structure.sql');
+const migrationSQL = fs.readFileSync(migrationPath, 'utf8');
+
+console.log('🔧 Ejecutando Migración 007: Corrección de estructura de análisis de productos');
+console.log('================================================================================');
+console.log();
+console.log('📋 Esta migración realiza los siguientes cambios:');
+console.log('   ✅ Elimina la columna work_order_item_id de product_analyses');
+console.log('   ✅ Agrega columna description opcional');
+console.log('   ✅ Actualiza la función get_work_order_analyses');
+console.log('   ✅ Limpia índices obsoletos');
+console.log();
+console.log('📄 CONTENIDO DE LA MIGRACIÓN:');
+console.log('================================================================================');
+console.log(migrationSQL);
+console.log('================================================================================');
+console.log();
+console.log('📋 INSTRUCCIONES:');
+console.log('1. Ve a tu proyecto de Supabase');
+console.log('2. Abre el SQL Editor');
+console.log('3. Copia y pega el SQL de arriba');
+console.log('4. Ejecuta la consulta');
+console.log();
+console.log('⚠️ IMPORTANTE: Esta migración modifica la estructura de la tabla product_analyses');
+console.log('   Asegúrate de que no haya datos importantes que dependan de work_order_item_id');
+console.log();
+console.log('🎯 RESULTADO ESPERADO:');
+console.log('   ✅ Los análisis ahora serán de la formulación completa');
+console.log('   ✅ No se requiere selección de producto individual');
+console.log('   ✅ Se agrega campo descripción opcional');
+console.log('   ✅ Funciones actualizadas para nueva estructura');
+console.log();
+console.log('🔄 Después de ejecutar la migración:');
+console.log('   1. Reinicia el servidor proxy (node proxy-server.js)');
+console.log('   2. El sistema funcionará correctamente sin selección de productos');
+console.log();
+console.log('🚀 ¡La migración está lista para ejecutar!');

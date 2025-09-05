@@ -4,6 +4,8 @@ import { productsService } from '../services/productsService';
 import { FaRegEdit, FaRegTrashAlt, FaPowerOff, FaEye, FaFlask } from 'react-icons/fa';
 import './ProductsList.css';
 
+type ViewMode = 'cards' | 'grid';
+
 interface ProductsListProps {
   onEdit: (product: Product) => void;
   onViewDetails: (product: Product) => void;
@@ -24,6 +26,7 @@ const ProductsList: React.FC<ProductsListProps> = ({
   const [showInactive, setShowInactive] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
   const [actionLoading, setActionLoading] = useState<string | null>(null);
+  const [viewMode, setViewMode] = useState<ViewMode>('cards');
 
   useEffect(() => {
     loadProducts();
@@ -114,9 +117,34 @@ const ProductsList: React.FC<ProductsListProps> = ({
 
   return (
     <div className="products-list">
-      <div className="header">
-        <h1>Fórmulas</h1>
-        <div className="controls">
+      <div className="list-header">
+        <h2>🧪 Fórmulas</h2>
+        <div className="header-actions">
+          <div className="view-selector">
+            <button
+              onClick={() => setViewMode('cards')}
+              className={`view-button ${viewMode === 'cards' ? 'active' : ''}`}
+              title="Vista de tarjetas"
+            >
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <rect x="3" y="3" width="7" height="7"></rect>
+                <rect x="14" y="3" width="7" height="7"></rect>
+                <rect x="14" y="14" width="7" height="7"></rect>
+                <rect x="3" y="14" width="7" height="7"></rect>
+              </svg>
+            </button>
+            <button
+              onClick={() => setViewMode('grid')}
+              className={`view-button ${viewMode === 'grid' ? 'active' : ''}`}
+              title="Vista de grilla"
+            >
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <path d="M3 6h18"></path>
+                <path d="M3 12h18"></path>
+                <path d="M3 18h18"></path>
+              </svg>
+            </button>
+          </div>
           <input
             type="text"
             placeholder="Buscar fórmulas..."
@@ -135,16 +163,16 @@ const ProductsList: React.FC<ProductsListProps> = ({
         </div>
       </div>
 
-      <div className="products-grid">
-        {filteredProducts.length === 0 ? (
-          <div className="empty-state">
-            <p>No se encontraron fórmulas</p>
-            <p className="empty-subtitle">
-              {searchTerm ? 'Intenta con otros términos de búsqueda' : 'Crea tu primera fórmula para comenzar'}
-            </p>
-          </div>
-        ) : (
-          filteredProducts.map(product => {
+      {filteredProducts.length === 0 ? (
+        <div className="empty-state">
+          <p>No se encontraron fórmulas</p>
+          <p className="empty-subtitle">
+            {searchTerm ? 'Intenta con otros términos de búsqueda' : 'Crea tu primera fórmula para comenzar'}
+          </p>
+        </div>
+      ) : viewMode === 'cards' ? (
+        <div className="products-grid">
+          {filteredProducts.map(product => {
             const status = getProductStatus(product);
             return (
               <div key={product.id} className={`product-card ${!product.is_active ? 'inactive' : ''}`}>
@@ -253,9 +281,101 @@ const ProductsList: React.FC<ProductsListProps> = ({
                 </div>
               </div>
             );
-          })
-        )}
-      </div>
+          })}
+        </div>
+      ) : (
+        <div className="products-table-container">
+          <div className="products-table-wrapper">
+            <table className="products-table">
+              <thead>
+                <tr>
+                  <th>Nombre</th>
+                  <th>Descripción</th>
+                  <th>Unidad</th>
+                  <th>Cantidad Base</th>
+                  <th>Creado</th>
+                  <th>Estado</th>
+                  <th>Acciones</th>
+                </tr>
+              </thead>
+              <tbody>
+                {filteredProducts.map(product => {
+                  const status = getProductStatus(product);
+                  return (
+                    <tr key={product.id} className={!product.is_active ? 'inactive' : ''}>
+                      <td className="name-cell">{product.name}</td>
+                      <td className="description-cell">
+                        {product.description || '-'}
+                      </td>
+                      <td className="unit-cell">{product.unit}</td>
+                      <td className="base-quantity-cell">{product.base_quantity}</td>
+                      <td className="created-cell">
+                        {new Date(product.created_at).toLocaleDateString('es-ES')}
+                      </td>
+                      <td>
+                        <span className={`badge ${status.class}`}>
+                          {status.text}
+                        </span>
+                      </td>
+                      <td className="actions-cell">
+                        <button
+                          onClick={() => onViewDetails(product)}
+                          className="action-button view-button table-action"
+                          title="Ver detalles"
+                        >
+                          👁️
+                        </button>
+                        {onManageFormula && (
+                          <button
+                            onClick={() => onManageFormula(product)}
+                            className="action-button formula-button table-action"
+                            title="Gestionar fórmula"
+                          >
+                            🧪
+                          </button>
+                        )}
+                        <button
+                          onClick={() => onEdit(product)}
+                          className="action-button edit-button table-action"
+                          title="Editar"
+                        >
+                          ✏️
+                        </button>
+                        <button
+                          onClick={() => handleDisable(product)}
+                          className={`action-button ${product.is_active ? 'warning' : 'success'} table-action`}
+                          title={product.is_active ? 'Deshabilitar' : 'Habilitar'}
+                          disabled={actionLoading === `disable-${product.id}`}
+                        >
+                          {actionLoading === `disable-${product.id}` ? (
+                            <div className="loading-spinner" />
+                          ) : (
+                            <FaPowerOff />
+                          )}
+                        </button>
+                        {showInactive && (
+                          <button
+                            onClick={() => handleDelete(product)}
+                            className="action-button delete-button table-action"
+                            title="Eliminar"
+                            disabled={actionLoading === `delete-${product.id}`}
+                          >
+                            {actionLoading === `delete-${product.id}` ? (
+                              <div className="loading-spinner" />
+                            ) : (
+                              '🗑️'
+                            )}
+                          </button>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

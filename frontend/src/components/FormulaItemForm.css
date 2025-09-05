@@ -219,6 +219,35 @@
   color: #d32f2f;
 }
 
+/* Grupo de entrada de porcentaje */
+.percentage-input-group {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.percentage-input-group .form-input {
+  flex: 1;
+  padding-right: 40px; /* Espacio para el símbolo % */
+}
+
+/* Campo de ancho completo */
+.form-group.full-width {
+  grid-column: 1 / -1; /* Ocupa toda la fila */
+}
+
+/* Helper text para explicar campos */
+.field-helper {
+  margin-top: 8px;
+  padding: 8px 12px;
+  background: linear-gradient(135deg, rgba(102, 126, 234, 0.05), rgba(118, 75, 162, 0.03));
+  border-left: 3px solid #667eea;
+  border-radius: 0 8px 8px 0;
+  font-size: 13px;
+  color: #495057;
+  font-style: italic;
+}
+
 /* Acciones del formulario */
 .form-actions {
   display: flex;
@@ -299,31 +328,50 @@
     grid-template-columns: 1fr;
     gap: 15px;
   }
-  
+
   .item-form {
     padding: 15px;
   }
-  
+
   .form-header {
     padding: 12px 15px;
   }
-  
+
   .info-card {
     padding: 15px;
   }
-  
+
   .form-actions {
     flex-direction: column;
   }
-  
+
   .btn {
     width: 100%;
   }
-  
+
   .analysis-row {
     flex-direction: column;
     align-items: flex-start;
     gap: 4px;
+  }
+
+  /* Helper text en responsive */
+  .field-helper {
+    margin-top: 6px;
+    padding: 6px 10px;
+    font-size: 12px;
+  }
+
+  .quantity-input-group .form-input {
+    padding-right: 45px;
+  }
+
+  .percentage-input-group .form-input {
+    padding-right: 35px;
+  }
+
+  .unit-label {
+    font-size: 13px;
   }
 }
 

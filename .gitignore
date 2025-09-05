@@ -8,6 +8,7 @@ public_html/api/.env
 public_html/vendor/
 
 # General
+node_modules/
 .env
 .DS_Store
 *.log

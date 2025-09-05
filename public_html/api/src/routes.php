@@ -486,6 +486,7 @@ $app->post('/raw-materials/{id}/entries', function ($request, $response, $args) 
             'raw_material_id' => $raw_material_id,
             'quantity' => $validation['data']['quantity'],
             'entry_type' => $validation['data']['entry_type'],
+            'unit_price' => isset($validation['data']['unit_price']) ? (float)$validation['data']['unit_price'] : null,
             'notes' => $validation['data']['notes'] ?? null,
             'movement_date' => isset($validation['data']['movement_date']) ?
                 date('Y-m-d\TH:i:s\Z', strtotime($validation['data']['movement_date'])) :
@@ -2576,3 +2577,492 @@ $app->delete('/work-orders/{id}', function ($request, $response, $args) use ($su
 });
 
 echo "✅ Rutas de órdenes de trabajo cargadas exitosamente\n";
+
+// =========================================
+// FUNCIONES DE VALIDACIÓN PARA ANÁLISIS
+// =========================================
+
+// Función helper para validar datos de análisis
+function validateProductAnalysisData($data) {
+    $errors = [];
+
+    echo "🔍 Validando datos de análisis: " . print_r($data, true) . "\n";
+
+    if (empty($data['work_order_item_id'])) {
+        $errors[] = 'El item de orden de trabajo es requerido';
+        echo "❌ Error: work_order_item_id vacío\n";
+    } else {
+        echo "✅ work_order_item_id válido: {$data['work_order_item_id']}\n";
+        // Validar formato UUID
+        if (!preg_match('/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i', $data['work_order_item_id'])) {
+            $errors[] = 'El ID del item de orden de trabajo debe ser un UUID válido';
+            echo "❌ Error: work_order_item_id no es un UUID válido\n";
+        }
+    }
+
+    $valid_types = ['chemical', 'physical', 'microbiological', 'organoleptic', 'general'];
+    if (empty($data['analysis_type']) || !in_array($data['analysis_type'], $valid_types)) {
+        $errors[] = 'El tipo de análisis debe ser: chemical, physical, microbiological, organoleptic o general';
+        echo "❌ Error: analysis_type inválido - valor: " . ($data['analysis_type'] ?? 'no definido') . "\n";
+    } else {
+        echo "✅ analysis_type válido: {$data['analysis_type']}\n";
+    }
+
+    if (!empty($data['analysis_date']) && !strtotime($data['analysis_date'])) {
+        $errors[] = 'La fecha de análisis no es válida';
+        echo "❌ Error: analysis_date inválida - valor: {$data['analysis_date']}\n";
+    } else {
+        echo "✅ analysis_date válida: " . ($data['analysis_date'] ?? 'no definida') . "\n";
+    }
+
+    echo "🎯 Errores de validación: " . count($errors) . "\n";
+    if (!empty($errors)) {
+        echo "❌ Errores encontrados: " . implode(', ', $errors) . "\n";
+    }
+
+    return ['errors' => $errors, 'data' => $data];
+}
+
+// =========================================
+// RUTAS PARA ANÁLISIS DE PRODUCTOS
+// =========================================
+
+// GET /api/work-orders/{id}/analyses - Obtener análisis de una orden de trabajo
+$app->get('/work-orders/{id}/analyses', function ($request, $response, $args) use ($supabase_client) {
+    try {
+        $work_order_id = $args['id'];
+
+        echo "📊 Obteniendo análisis para OT: {$work_order_id}\n";
+
+        // Verificar que la OT existe
+        $wo_check = $supabase_client->get("work_orders?id=eq.{$work_order_id}");
+        $wo_data = json_decode($wo_check->getBody(), true);
+
+        if (empty($wo_data)) {
+            $data = [
+                'success' => false,
+                'message' => 'Orden de trabajo no encontrada'
+            ];
+            return $response->withJson($data, 404);
+        }
+
+        // Obtener análisis usando la función SQL
+        $query = "select * from get_work_order_analyses('{$work_order_id}')";
+        echo "📊 Query SQL: {$query}\n";
+
+        $api_response = $supabase_client->post('rpc/exec', [
+            'json' => ['query' => $query]
+        ]);
+
+        $result = json_decode($api_response->getBody(), true);
+        echo "📊 Resultados encontrados: " . count($result) . "\n";
+
+        $data = [
+            'success' => true,
+            'data' => $result,
+            'count' => count($result)
+        ];
+
+        return $response->withJson($data);
+
+    } catch (RequestException $e) {
+        $data = [
+            'success' => false,
+            'message' => 'Error al obtener análisis de la orden de trabajo',
+            'error' => $e->getMessage()
+        ];
+        return $response->withJson($data, 500);
+    }
+});
+
+// POST /api/work-orders/{id}/analyses - Crear nuevo análisis para una orden de trabajo
+$app->post('/work-orders/{id}/analyses', function ($request, $response, $args) use ($supabase_client) {
+    try {
+        $work_order_id = $args['id'];
+
+        echo "📊 Creando análisis para OT: {$work_order_id}\n";
+
+        // Verificar que la OT existe
+        $wo_check = $supabase_client->get("work_orders?id=eq.{$work_order_id}");
+        $wo_data = json_decode($wo_check->getBody(), true);
+
+        if (empty($wo_data)) {
+            $data = [
+                'success' => false,
+                'message' => 'Orden de trabajo no encontrada'
+            ];
+            return $response->withJson($data, 404);
+        }
+
+        // Verificar si es una petición multipart/form-data (con archivo)
+        $uploadedFiles = $request->getUploadedFiles();
+        $hasFile = !empty($uploadedFiles) && isset($uploadedFiles['file']);
+
+        if ($hasFile) {
+            echo "📊 Procesando subida de archivo\n";
+
+            // Obtener datos del formulario
+            $input_data = $request->getParsedBody();
+            $file = $uploadedFiles['file'];
+
+            if ($file->getError() !== UPLOAD_ERR_OK) {
+                $data = [
+                    'success' => false,
+                    'message' => 'Error al subir el archivo'
+                ];
+                return $response->withJson($data, 400);
+            }
+
+            // Validar tipo de archivo
+            $allowedTypes = ['application/pdf', 'application/msword', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+                           'application/vnd.ms-excel', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+                           'image/jpeg', 'image/png'];
+            $fileType = $file->getClientMediaType();
+
+            if (!in_array($fileType, $allowedTypes)) {
+                $data = [
+                    'success' => false,
+                    'message' => 'Tipo de archivo no permitido. Solo se permiten: PDF, DOC, DOCX, XLS, XLSX, JPG, PNG'
+                ];
+                return $response->withJson($data, 400);
+            }
+
+            // Validar tamaño del archivo (máximo 10MB)
+            $maxSize = 10 * 1024 * 1024; // 10MB
+            if ($file->getSize() > $maxSize) {
+                $data = [
+                    'success' => false,
+                    'message' => 'El archivo es demasiado grande. Máximo permitido: 10MB'
+                ];
+                return $response->withJson($data, 400);
+            }
+
+            // Generar nombre único para el archivo
+            $fileExtension = pathinfo($file->getClientFilename(), PATHINFO_EXTENSION);
+            $uniqueFileName = uniqid('analysis_', true) . '.' . $fileExtension;
+            $uploadPath = __DIR__ . '/../../uploads/analyses/' . $uniqueFileName;
+
+            echo "📊 Guardando archivo en: {$uploadPath}\n";
+
+            // Mover archivo a la carpeta de uploads
+            $file->moveTo($uploadPath);
+
+            if (!file_exists($uploadPath)) {
+                $data = [
+                    'success' => false,
+                    'message' => 'Error al guardar el archivo en el servidor'
+                ];
+                return $response->withJson($data, 500);
+            }
+
+            echo "✅ Archivo guardado exitosamente\n";
+
+            // Agregar información del archivo a los datos
+            $input_data['file_name'] = $file->getClientFilename();
+            $input_data['file_path'] = '/uploads/analyses/' . $uniqueFileName;
+
+        } else {
+            // Petición normal sin archivo
+            $input_data = json_decode($request->getBody()->getContents(), true);
+            echo "📊 Datos recibidos (sin archivo): " . print_r($input_data, true) . "\n";
+        }
+
+        // Validar datos
+        $validation = validateProductAnalysisData($input_data);
+        if (!empty($validation['errors'])) {
+            $data = [
+                'success' => false,
+                'message' => 'Datos inválidos',
+                'errors' => $validation['errors']
+            ];
+            return $response->withJson($data, 400);
+        }
+
+        // Verificar que el work_order_item_id pertenece a la OT
+        $item_check = $supabase_client->get("work_order_items?id=eq.{$validation['data']['work_order_item_id']}&work_order_id=eq.{$work_order_id}");
+        $item_data = json_decode($item_check->getBody(), true);
+
+        if (empty($item_data)) {
+            $data = [
+                'success' => false,
+                'message' => 'El item especificado no pertenece a esta orden de trabajo'
+            ];
+            return $response->withJson($data, 400);
+        }
+
+        // Generar número de análisis único
+        $analysis_number_query = "select generate_analysis_number() as analysis_number";
+        $number_response = $supabase_client->post('rpc/exec', [
+            'json' => ['query' => $analysis_number_query]
+        ]);
+        $number_result = json_decode($number_response->getBody(), true);
+        $analysis_number = $number_result[0]['analysis_number'] ?? null;
+
+        if (!$analysis_number) {
+            $data = [
+                'success' => false,
+                'message' => 'Error al generar número de análisis único'
+            ];
+            return $response->withJson($data, 500);
+        }
+
+        echo "📊 Número de análisis generado: {$analysis_number}\n";
+
+        // Preparar datos para guardar
+        $dataToSave = [
+            'work_order_id' => $work_order_id,
+            'work_order_item_id' => $validation['data']['work_order_item_id'],
+            'analysis_number' => $analysis_number,
+            'analysis_type' => $validation['data']['analysis_type'],
+            'analysis_date' => isset($validation['data']['analysis_date']) ? date('Y-m-d', strtotime($validation['data']['analysis_date'])) : date('Y-m-d'),
+            'notes' => $validation['data']['notes'] ?? null,
+            'description' => $validation['data']['description'] ?? null,
+            'created_by' => $validation['data']['created_by'] ?? 'Sistema'
+        ];
+
+        // Manejar archivo si se proporcionó
+        if (isset($input_data['file_name']) && isset($input_data['file_path'])) {
+            $dataToSave['file_name'] = $input_data['file_name'];
+            $dataToSave['file_path'] = $input_data['file_path'];
+        }
+
+        echo "📊 Datos a guardar: " . print_r($dataToSave, true) . "\n";
+
+        $api_response = $supabase_client->post('product_analyses', [
+            'json' => $dataToSave
+        ]);
+
+        $created_analysis = json_decode($api_response->getBody(), true);
+
+        $data = [
+            'success' => true,
+            'message' => 'Análisis creado exitosamente',
+            'data' => $created_analysis[0],
+            'analysis_number' => $analysis_number
+        ];
+
+        echo "✅ Análisis creado: {$analysis_number}\n";
+        return $response->withJson($data, 201);
+
+    } catch (RequestException $e) {
+        $data = [
+            'success' => false,
+            'message' => 'Error al crear análisis',
+            'error' => $e->getMessage()
+        ];
+        return $response->withJson($data, 500);
+    }
+});
+
+// GET /api/analyses/{id} - Obtener análisis específico por analysis_number
+$app->get('/analyses/{id}', function ($request, $response, $args) use ($supabase_client) {
+    try {
+        $analysis_id = $args['id'];
+
+        echo "📊 Obteniendo análisis por número: {$analysis_id}\n";
+
+        // Buscar por analysis_number en lugar de id UUID
+        $api_response = $supabase_client->get("product_analyses?analysis_number=eq.{$analysis_id}");
+
+        $analyses = json_decode($api_response->getBody(), true);
+
+        if (empty($analyses)) {
+            echo "❌ No se encontró análisis con número: {$analysis_id}\n";
+            $data = [
+                'success' => false,
+                'message' => 'Análisis no encontrado'
+            ];
+            return $response->withJson($data, 404);
+        }
+
+        echo "✅ Análisis encontrado: {$analysis_id}\n";
+        $data = [
+            'success' => true,
+            'data' => $analyses[0]
+        ];
+
+        return $response->withJson($data);
+
+    } catch (RequestException $e) {
+        echo "❌ Error al obtener análisis: " . $e->getMessage() . "\n";
+        $data = [
+            'success' => false,
+            'message' => 'Error al obtener análisis',
+            'error' => $e->getMessage()
+        ];
+        return $response->withJson($data, 500);
+    }
+});
+
+// GET /api/analyses - Obtener todos los análisis
+$app->get('/analyses', function ($request, $response, $args) use ($supabase_client) {
+    try {
+        $params = $request->getQueryParams();
+        $limit = $params['limit'] ?? 10000;
+
+        echo "📊 Petición GET /analyses - Obteniendo todos los análisis\n";
+        echo "📊 Parámetros: " . print_r($params, true) . "\n";
+        echo "📊 Límite establecido: {$limit}\n";
+
+        // Obtener todos los análisis con información de orden de trabajo
+        $query = "select=*,work_orders(order_number,description,status)&order=created_at.desc&limit=" . $limit;
+
+        echo "📊 Query Supabase: {$query}\n";
+
+        $api_response = $supabase_client->get("product_analyses?" . $query);
+
+        echo "📊 Respuesta Supabase status: " . $api_response->getStatusCode() . "\n";
+
+        $response_body = $api_response->getBody()->getContents();
+        echo "📊 Cambio de bandera Raw response length: " . strlen($response_body) . " bytes\n";
+
+        $analyses = json_decode($response_body, true);
+
+        if (json_last_error() !== JSON_ERROR_NONE) {
+            echo "❌ Error decodificando JSON: " . json_last_error_msg() . "\n";
+            echo "❌ Raw response content: {$response_body}\n";
+            throw new Exception('JSON decode error: ' . json_last_error_msg());
+        }
+
+        echo "📊 Análisis encontrados: " . count($analyses) . "\n";
+
+        foreach ($analyses as $index => $analysis) {
+            echo "📊 Análisis {$index}: número {$analysis['analysis_number']}, tipo {$analysis['analysis_type']}, fecha {$analysis['analysis_date']}\n";
+            if (isset($analysis['work_orders'])) {
+                echo "📊 - OT: {$analysis['work_orders']['order_number']}, estado: {$analysis['work_orders']['status']}\n";
+            }
+        }
+
+        $data = [
+            'success' => true,
+            'data' => $analyses,
+            'count' => count($analyses)
+        ];
+
+        echo "✅ Respuesta enviada correctamente con " . count($analyses) . " análisis\n";
+        return $response->withJson($data);
+
+    } catch (RequestException $e) {
+        echo "❌ RequestException en GET /analyses: " . $e->getMessage() . "\n";
+        $data = [
+            'success' => false,
+            'message' => 'Error al obtener análisis',
+            'error' => $e->getMessage()
+        ];
+        return $response->withJson($data, 500);
+    } catch (Exception $e) {
+        echo "❌ Exception general en GET /analyses: " . $e->getMessage() . "\n";
+        $data = [
+            'success' => false,
+            'message' => 'Error interno del servidor',
+            'error' => $e->getMessage()
+        ];
+        return $response->withJson($data, 500);
+    }
+});
+
+// DELETE /api/analyses/{id} - Eliminar análisis
+$app->delete('/analyses/{id}', function ($request, $response, $args) use ($supabase_client) {
+    try {
+        $analysis_id = $args['id'];
+
+        echo "📊 Eliminando análisis con número: {$analysis_id}\n";
+
+        // Verificar que el análisis existe (buscando por analysis_number)
+        $check_response = $supabase_client->get("product_analyses?analysis_number=eq.{$analysis_id}");
+
+        $check_data = json_decode($check_response->getBody(), true);
+
+        if (empty($check_data)) {
+            echo "❌ Análisis no encontrado con número: {$analysis_id}\n";
+            $data = [
+                'success' => false,
+                'message' => 'Análisis no encontrado'
+            ];
+            return $response->withJson($data, 404);
+        }
+
+        // Eliminar usando el análisis ID real de la base de datos
+        $actual_analysis_id = $check_data[0]['id'];
+        $api_response = $supabase_client->delete("product_analyses?id=eq.{$actual_analysis_id}");
+
+        $data = [
+            'success' => true,
+            'message' => 'Análisis eliminado exitosamente'
+        ];
+
+        echo "✅ Análisis eliminado correctamente: {$analysis_id}\n";
+        return $response->withJson($data);
+
+    } catch (RequestException $e) {
+        echo "❌ Error al eliminar análisis: " . $e->getMessage() . "\n";
+        $data = [
+            'success' => false,
+            'message' => 'Error al eliminar análisis',
+            'error' => $e->getMessage()
+        ];
+        return $response->withJson($data, 500);
+    }
+});
+
+echo "✅ Rutas de análisis de productos cargadas exitosamente\n";
+
+// =========================================
+// RUTAS PARA ARCHIVOS SUBIDOS
+// =========================================
+
+// GET /api/uploads/analyses/{filename} - Servir archivos de análisis
+$app->get('/uploads/analyses/{filename}', function ($request, $response, $args) {
+    try {
+        $filename = $args['filename'];
+        $filePath = __DIR__ . '/../../uploads/analyses/' . $filename;
+
+        echo "📁 Solicitando archivo: {$filename}\n";
+        echo "📁 Ruta completa: {$filePath}\n";
+
+        // Verificar que el archivo existe
+        if (!file_exists($filePath)) {
+            echo "❌ Archivo no encontrado: {$filePath}\n";
+            return $response->withStatus(404)->write('Archivo no encontrado');
+        }
+
+        // Verificar que es un archivo (no un directorio)
+        if (!is_file($filePath)) {
+            echo "❌ No es un archivo válido: {$filePath}\n";
+            return $response->withStatus(404)->write('Archivo no encontrado');
+        }
+
+        // Obtener información del archivo
+        $fileSize = filesize($filePath);
+        $mimeType = mime_content_type($filePath) ?: 'application/octet-stream';
+
+        echo "✅ Archivo encontrado - Tamaño: {$fileSize} bytes, Tipo: {$mimeType}\n";
+
+        // Configurar headers para la descarga
+        $response = $response
+            ->withHeader('Content-Type', $mimeType)
+            ->withHeader('Content-Length', $fileSize)
+            ->withHeader('Content-Disposition', 'inline; filename="' . basename($filePath) . '"')
+            ->withHeader('Cache-Control', 'public, max-age=3600'); // Cache por 1 hora
+
+        // Leer y enviar el archivo
+        $fileHandle = fopen($filePath, 'rb');
+        if ($fileHandle === false) {
+            echo "❌ Error al abrir el archivo: {$filePath}\n";
+            return $response->withStatus(500)->write('Error al leer el archivo');
+        }
+
+        // Leer el archivo en chunks para archivos grandes
+        $response->getBody()->write(fread($fileHandle, $fileSize));
+        fclose($fileHandle);
+
+        echo "✅ Archivo enviado exitosamente\n";
+        return $response;
+
+    } catch (Exception $e) {
+        echo "❌ Error sirviendo archivo: " . $e->getMessage() . "\n";
+        return $response->withStatus(500)->write('Error interno del servidor');
+    }
+});
+
+echo "✅ Rutas de archivos subidos cargadas exitosamente\n";

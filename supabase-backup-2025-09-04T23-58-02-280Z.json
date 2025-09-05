@@ -1,0 +1,938 @@
+{
+  "timestamp": "2025-09-04T23:58:00.836Z",
+  "database": "supabase",
+  "schema": {
+    "migrations": [
+      {
+        "filename": "001_create_raw_materials_tables.sql",
+        "content": "-- Crear tabla de materias primas\r\nCREATE TABLE IF NOT EXISTS raw_materials (\r\n  id UUID DEFAULT gen_random_uuid() PRIMARY KEY,\r\n  code VARCHAR(50) UNIQUE NOT NULL,\r\n  name VARCHAR(255) NOT NULL,\r\n  description TEXT,\r\n  unit VARCHAR(50) NOT NULL DEFAULT 'unidad',\r\n  current_stock DECIMAL(10,3) NOT NULL DEFAULT 0,\r\n  min_stock DECIMAL(10,3) DEFAULT 0,\r\n  max_stock DECIMAL(10,3) DEFAULT NULL,\r\n  location VARCHAR(255),\r\n  supplier VARCHAR(255),\r\n  is_active BOOLEAN NOT NULL DEFAULT TRUE,\r\n  created_at TIMESTAMPTZ DEFAULT NOW(),\r\n  updated_at TIMESTAMPTZ DEFAULT NOW()\r\n);\r\n\r\n-- Crear tabla de entradas de inventario\r\nCREATE TABLE IF NOT EXISTS inventory_entries (\r\n  id UUID DEFAULT gen_random_uuid() PRIMARY KEY,\r\n  raw_material_id UUID NOT NULL REFERENCES raw_materials(id) ON DELETE CASCADE,\r\n  quantity DECIMAL(10,3) NOT NULL,\r\n  entry_type VARCHAR(10) NOT NULL CHECK (entry_type IN ('in', 'out')),\r\n  movement_date TIMESTAMPTZ DEFAULT NOW(),\r\n  notes TEXT,\r\n  user_id VARCHAR(255), -- Para futuras implementaciones con autenticación\r\n  created_at TIMESTAMPTZ DEFAULT NOW()\r\n);\r\n\r\n-- Índices para mejor rendimiento (si no existen)\r\nCREATE INDEX IF NOT EXISTS idx_raw_materials_code ON raw_materials(code);\r\nCREATE INDEX IF NOT EXISTS idx_raw_materials_active ON raw_materials(is_active);\r\nCREATE INDEX IF NOT EXISTS idx_inventory_entries_raw_material_id ON inventory_entries(raw_material_id);\r\nCREATE INDEX IF NOT EXISTS idx_inventory_entries_created_at ON inventory_entries(created_at DESC);\r\n\r\n-- Crear trigger para actualizar updated_at en raw_materials\r\nCREATE OR REPLACE FUNCTION update_updated_at_column()\r\nRETURNS TRIGGER AS $$\r\nBEGIN\r\n  NEW.updated_at = NOW();\r\n  RETURN NEW;\r\nEND;\r\n$$ language 'plpgsql';\r\n\r\nCREATE TRIGGER update_raw_materials_updated_at BEFORE UPDATE ON raw_materials FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();\r\n\r\n-- Función para calcular stock actual\r\nCREATE OR REPLACE FUNCTION calculate_raw_material_stock(material_uuid UUID)\r\nRETURNS DECIMAL(10,3) AS $$\r\nBEGIN\r\n  RETURN COALESCE(\r\n    (SELECT SUM(\r\n      CASE\r\n        WHEN entry_type = 'in' THEN quantity\r\n        WHEN entry_type = 'out' THEN -quantity\r\n      END\r\n    ) FROM inventory_entries WHERE raw_material_id = material_uuid), 0\r\n  );\r\nEND;\r\n$$ LANGUAGE plpgsql;\r\n\r\n-- Función para actualizar stock automáticamente\r\nCREATE OR REPLACE FUNCTION update_raw_material_stock()\r\nRETURNS TRIGGER AS $$\r\nDECLARE\r\n  material_id UUID;\r\n  old_stock DECIMAL(10,3);\r\n  new_stock DECIMAL(10,3);\r\nBEGIN\r\n  material_id := COALESCE(NEW.raw_material_id, OLD.raw_material_id);\r\n\r\n  -- Obtener stock anterior\r\n  SELECT current_stock INTO old_stock FROM raw_materials WHERE id = material_id;\r\n\r\n  -- Calcular nuevo stock\r\n  new_stock := calculate_raw_material_stock(material_id);\r\n\r\n  UPDATE raw_materials SET\r\n    current_stock = new_stock,\r\n    updated_at = NOW()\r\n  WHERE id = material_id;\r\n\r\n  RAISE NOTICE 'Trigger update_raw_material_stock: ID=% OLD_STOCK=% NEW_STOCK=%', material_id, old_stock, new_stock;\r\n\r\n  RETURN COALESCE(NEW, OLD);\r\nEND;\r\n$$ LANGUAGE plpgsql;\r\n\r\n-- Trigger para actualizar stock\r\nDROP TRIGGER IF EXISTS update_stock_after_inventory_entry ON inventory_entries;\r\nCREATE TRIGGER update_stock_after_inventory_entry\r\n  AFTER INSERT OR UPDATE OR DELETE ON inventory_entries\r\n  FOR EACH ROW EXECUTE FUNCTION update_raw_material_stock();\r\n\r\n-- Políticas RLS para raw_materials (si no existe)\r\nALTER TABLE raw_materials ENABLE ROW LEVEL SECURITY;\r\nDO $$ BEGIN\r\n    CREATE POLICY \"Permitir todo acceso en raw_materials\" ON raw_materials FOR ALL TO PUBLIC USING (true) WITH CHECK (true);\r\nEXCEPTION\r\n    WHEN duplicate_object THEN\r\n        RAISE NOTICE 'Policy \"Permitir todo acceso en raw_materials\" ya existe, saltando...';\r\nEND $$;\r\n\r\n-- Políticas RLS para inventory_entries (si no existe)\r\nALTER TABLE inventory_entries ENABLE ROW LEVEL SECURITY;\r\nDO $$ BEGIN\r\n    CREATE POLICY \"Permitir todo acceso en inventory_entries\" ON inventory_entries FOR ALL TO PUBLIC USING (true) WITH CHECK (true);\r\nEXCEPTION\r\n    WHEN duplicate_object THEN\r\n        RAISE NOTICE 'Policy \"Permitir todo acceso en inventory_entries\" ya existe, saltando...';\r\nEND $$;"
+      },
+      {
+        "filename": "002_fix_stock_calculation.sql",
+        "content": "-- Script para recalcular todos los stocks de materias primas\r\n-- Ejecutar este script si los stocks no están actualizados correctamente\r\n\r\n-- Actualizar todos los stocks basándose en las entradas de inventario\r\nUPDATE raw_materials \r\nSET current_stock = calculate_raw_material_stock(id),\r\n    updated_at = NOW()\r\nWHERE id IN (SELECT DISTINCT raw_material_id FROM inventory_entries);\r\n\r\n-- Verificar que los stocks se calcularon correctamente\r\nSELECT \r\n    rm.code,\r\n    rm.name,\r\n    rm.current_stock as stock_bd,\r\n    calculate_raw_material_stock(rm.id) as stock_calculado,\r\n    (SELECT COUNT(*) FROM inventory_entries WHERE raw_material_id = rm.id) as total_entradas\r\nFROM raw_materials rm\r\nWHERE rm.is_active = true\r\nORDER BY rm.code;"
+      },
+      {
+        "filename": "003_create_products_tables.sql",
+        "content": "-- Crear tablas para productos y fórmulas\r\n-- Migración 003: Sistema de productos con fórmulas\r\n\r\n-- Crear tabla de productos\r\nCREATE TABLE IF NOT EXISTS products (\r\n  id UUID DEFAULT gen_random_uuid() PRIMARY KEY,\r\n  name VARCHAR(255) NOT NULL UNIQUE,\r\n  description TEXT,\r\n  unit VARCHAR(50) NOT NULL DEFAULT 'unidad',\r\n  base_quantity DECIMAL(10,3) NOT NULL DEFAULT 1,\r\n  is_active BOOLEAN NOT NULL DEFAULT TRUE,\r\n  created_at TIMESTAMPTZ DEFAULT NOW(),\r\n  updated_at TIMESTAMPTZ DEFAULT NOW()\r\n);\r\n\r\n-- Crear tabla de fórmulas (relación muchos a muchos entre productos y materias primas)\r\nCREATE TABLE IF NOT EXISTS product_formulas (\r\n  id UUID DEFAULT gen_random_uuid() PRIMARY KEY,\r\n  product_id UUID NOT NULL REFERENCES products(id) ON DELETE CASCADE,\r\n  raw_material_id UUID NOT NULL REFERENCES raw_materials(id) ON DELETE CASCADE,\r\n  quantity DECIMAL(10,3) NOT NULL CHECK (quantity > 0),\r\n  created_at TIMESTAMPTZ DEFAULT NOW(),\r\n  UNIQUE(product_id, raw_material_id) -- Prevenir duplicados\r\n);\r\n\r\n-- Índices para mejor rendimiento\r\nCREATE INDEX IF NOT EXISTS idx_products_name ON products(name);\r\nCREATE INDEX IF NOT EXISTS idx_products_active ON products(is_active);\r\nCREATE INDEX IF NOT EXISTS idx_products_created_at ON products(created_at DESC);\r\nCREATE INDEX IF NOT EXISTS idx_product_formulas_product_id ON product_formulas(product_id);\r\nCREATE INDEX IF NOT EXISTS idx_product_formulas_raw_material_id ON product_formulas(raw_material_id);\r\n\r\n-- Crear trigger para actualizar updated_at en products\r\nCREATE OR REPLACE FUNCTION update_products_updated_at_column()\r\nRETURNS TRIGGER AS $$\r\nBEGIN\r\n  NEW.updated_at = NOW();\r\n  RETURN NEW;\r\nEND;\r\n$$ language 'plpgsql';\r\n\r\nCREATE TRIGGER update_products_updated_at \r\n  BEFORE UPDATE ON products \r\n  FOR EACH ROW EXECUTE FUNCTION update_products_updated_at_column();\r\n\r\n-- Políticas RLS para products\r\nALTER TABLE products ENABLE ROW LEVEL SECURITY;\r\nCREATE POLICY \"Permitir todo acceso en products\" ON products \r\n  FOR ALL TO PUBLIC USING (true) WITH CHECK (true);\r\n\r\n-- Políticas RLS para product_formulas\r\nALTER TABLE product_formulas ENABLE ROW LEVEL SECURITY;\r\nCREATE POLICY \"Permitir todo acceso en product_formulas\" ON product_formulas \r\n  FOR ALL TO PUBLIC USING (true) WITH CHECK (true);\r\n\r\n-- Función para obtener productos con sus fórmulas (útil para consultas optimizadas)\r\nCREATE OR REPLACE FUNCTION get_product_with_formula(product_uuid UUID)\r\nRETURNS TABLE (\r\n  product_id UUID,\r\n  product_name VARCHAR(255),\r\n  product_description TEXT,\r\n  product_unit VARCHAR(50),\r\n  product_base_quantity DECIMAL(10,3),\r\n  product_is_active BOOLEAN,\r\n  product_created_at TIMESTAMPTZ,\r\n  product_updated_at TIMESTAMPTZ,\r\n  formula_id UUID,\r\n  raw_material_id UUID,\r\n  raw_material_name VARCHAR(255),\r\n  raw_material_unit VARCHAR(50),\r\n  raw_material_current_stock DECIMAL(10,3),\r\n  formula_quantity DECIMAL(10,3)\r\n) AS $$\r\nBEGIN\r\n  RETURN QUERY\r\n  SELECT \r\n    p.id as product_id,\r\n    p.name as product_name,\r\n    p.description as product_description,\r\n    p.unit as product_unit,\r\n    p.base_quantity as product_base_quantity,\r\n    p.is_active as product_is_active,\r\n    p.created_at as product_created_at,\r\n    p.updated_at as product_updated_at,\r\n    pf.id as formula_id,\r\n    rm.id as raw_material_id,\r\n    rm.name as raw_material_name,\r\n    rm.unit as raw_material_unit,\r\n    rm.current_stock as raw_material_current_stock,\r\n    pf.quantity as formula_quantity\r\n  FROM products p\r\n  LEFT JOIN product_formulas pf ON p.id = pf.product_id\r\n  LEFT JOIN raw_materials rm ON pf.raw_material_id = rm.id\r\n  WHERE p.id = product_uuid\r\n  ORDER BY rm.name;\r\nEND;\r\n$$ LANGUAGE plpgsql;\r\n\r\n-- Función para calcular cuántas unidades de un producto se pueden producir\r\nCREATE OR REPLACE FUNCTION calculate_producible_quantity(product_uuid UUID)\r\nRETURNS DECIMAL(10,3) AS $$\r\nDECLARE\r\n  min_possible DECIMAL(10,3) := NULL;\r\n  formula_record RECORD;\r\n  possible_from_material DECIMAL(10,3);\r\nBEGIN\r\n  -- Iterar sobre cada materia prima en la fórmula\r\n  FOR formula_record IN \r\n    SELECT pf.quantity, rm.current_stock\r\n    FROM product_formulas pf\r\n    JOIN raw_materials rm ON pf.raw_material_id = rm.id\r\n    WHERE pf.product_id = product_uuid AND rm.is_active = true\r\n  LOOP\r\n    -- Calcular cuántas unidades se pueden hacer con esta materia prima\r\n    IF formula_record.quantity > 0 THEN\r\n      possible_from_material := FLOOR(formula_record.current_stock / formula_record.quantity);\r\n      \r\n      -- Mantener el mínimo (factor limitante)\r\n      IF min_possible IS NULL OR possible_from_material < min_possible THEN\r\n        min_possible := possible_from_material;\r\n      END IF;\r\n    END IF;\r\n  END LOOP;\r\n  \r\n  -- Si no hay fórmula o no se puede producir nada, retornar 0\r\n  RETURN COALESCE(min_possible, 0);\r\nEND;\r\n$$ LANGUAGE plpgsql;\r\n\r\n-- Insertar datos de ejemplo para testing (opcional - comentar en producción)\r\n/*\r\nINSERT INTO products (name, description, unit, base_quantity) VALUES \r\n('Agrocup', 'Fertilizante líquido premium para cultivos', 'litro', 1000),\r\n('Nutrimix', 'Mezcla nutritiva para plantas ornamentales', 'kg', 50),\r\n('Calciomax', 'Suplemento de calcio para suelos ácidos', 'kg', 25);\r\n\r\n-- Ejemplo de fórmulas (requiere que existan las materias primas)\r\n-- INSERT INTO product_formulas (product_id, raw_material_id, quantity) VALUES \r\n-- ((SELECT id FROM products WHERE name = 'Agrocup'), (SELECT id FROM raw_materials WHERE code = 'CALC'), 200),\r\n-- ((SELECT id FROM products WHERE name = 'Agrocup'), (SELECT id FROM raw_materials WHERE code = 'COBR'), 150),\r\n-- ((SELECT id FROM products WHERE name = 'Agrocup'), (SELECT id FROM raw_materials WHERE code = 'AGUA'), 20);\r\n*/"
+      },
+      {
+        "filename": "004_create_work_orders_tables.sql",
+        "content": "-- Crear tablas para órdenes de trabajo (OT)\r\n-- Migración 004: Sistema de órdenes de trabajo\r\n\r\n-- Crear tabla de órdenes de trabajo\r\nCREATE TABLE IF NOT EXISTS work_orders (\r\n  id UUID DEFAULT gen_random_uuid() PRIMARY KEY,\r\n  order_number VARCHAR(50) NOT NULL UNIQUE,\r\n  description TEXT,\r\n  status VARCHAR(20) NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'in_progress', 'completed', 'cancelled')),\r\n  priority VARCHAR(10) NOT NULL DEFAULT 'normal' CHECK (priority IN ('low', 'normal', 'high', 'urgent')),\r\n  planned_start_date DATE,\r\n  planned_end_date DATE,\r\n  actual_start_datetime TIMESTAMPTZ,\r\n  actual_end_datetime TIMESTAMPTZ,\r\n  -- Keep old fields for backward compatibility\r\n  actual_start_date DATE,\r\n  actual_end_date DATE,\r\n  notes TEXT,\r\n  created_by VARCHAR(255),\r\n  created_at TIMESTAMPTZ DEFAULT NOW(),\r\n  updated_at TIMESTAMPTZ DEFAULT NOW()\r\n);\r\n\r\n-- Crear tabla de items de órdenes de trabajo (productos a producir)\r\nCREATE TABLE IF NOT EXISTS work_order_items (\r\n  id UUID DEFAULT gen_random_uuid() PRIMARY KEY,\r\n  work_order_id UUID NOT NULL REFERENCES work_orders(id) ON DELETE CASCADE,\r\n  product_id UUID NOT NULL REFERENCES products(id) ON DELETE CASCADE,\r\n  planned_quantity DECIMAL(10,3) NOT NULL CHECK (planned_quantity > 0),\r\n  produced_quantity DECIMAL(10,3) NOT NULL DEFAULT 0 CHECK (produced_quantity >= 0),\r\n  unit VARCHAR(50) NOT NULL,\r\n  status VARCHAR(20) NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'in_progress', 'completed', 'cancelled')),\r\n  notes TEXT,\r\n  created_at TIMESTAMPTZ DEFAULT NOW(),\r\n  updated_at TIMESTAMPTZ DEFAULT NOW(),\r\n  UNIQUE(work_order_id, product_id) -- Prevenir duplicados de productos en la misma OT\r\n);\r\n\r\n-- Crear tabla para el consumo de materias primas en OT (para seguimiento)\r\nCREATE TABLE IF NOT EXISTS work_order_consumption (\r\n  id UUID DEFAULT gen_random_uuid() PRIMARY KEY,\r\n  work_order_item_id UUID NOT NULL REFERENCES work_order_items(id) ON DELETE CASCADE,\r\n  raw_material_id UUID NOT NULL REFERENCES raw_materials(id) ON DELETE CASCADE,\r\n  planned_consumption DECIMAL(10,3) NOT NULL CHECK (planned_consumption >= 0),\r\n  actual_consumption DECIMAL(10,3) NOT NULL DEFAULT 0 CHECK (actual_consumption >= 0),\r\n  unit VARCHAR(50) NOT NULL,\r\n  created_at TIMESTAMPTZ DEFAULT NOW(),\r\n  updated_at TIMESTAMPTZ DEFAULT NOW(),\r\n  UNIQUE(work_order_item_id, raw_material_id) -- Prevenir duplicados\r\n);\r\n\r\n-- Índices para mejor rendimiento\r\nCREATE INDEX IF NOT EXISTS idx_work_orders_status ON work_orders(status);\r\nCREATE INDEX IF NOT EXISTS idx_work_orders_priority ON work_orders(priority);\r\nCREATE INDEX IF NOT EXISTS idx_work_orders_created_at ON work_orders(created_at DESC);\r\nCREATE INDEX IF NOT EXISTS idx_work_orders_planned_start ON work_orders(planned_start_date);\r\nCREATE INDEX IF NOT EXISTS idx_work_order_items_work_order_id ON work_order_items(work_order_id);\r\nCREATE INDEX IF NOT EXISTS idx_work_order_items_product_id ON work_order_items(product_id);\r\nCREATE INDEX IF NOT EXISTS idx_work_order_items_status ON work_order_items(status);\r\nCREATE INDEX IF NOT EXISTS idx_work_order_consumption_item_id ON work_order_consumption(work_order_item_id);\r\nCREATE INDEX IF NOT EXISTS idx_work_order_consumption_raw_material_id ON work_order_consumption(raw_material_id);\r\n\r\n-- Crear trigger para actualizar updated_at en work_orders\r\nCREATE OR REPLACE FUNCTION update_work_orders_updated_at_column()\r\nRETURNS TRIGGER AS $$\r\nBEGIN\r\n  NEW.updated_at = NOW();\r\n  RETURN NEW;\r\nEND;\r\n$$ language 'plpgsql';\r\n\r\nCREATE TRIGGER update_work_orders_updated_at\r\n  BEFORE UPDATE ON work_orders\r\n  FOR EACH ROW EXECUTE FUNCTION update_work_orders_updated_at_column();\r\n\r\n-- Crear trigger para actualizar updated_at en work_order_items\r\nCREATE OR REPLACE FUNCTION update_work_order_items_updated_at_column()\r\nRETURNS TRIGGER AS $$\r\nBEGIN\r\n  NEW.updated_at = NOW();\r\n  RETURN NEW;\r\nEND;\r\n$$ language 'plpgsql';\r\n\r\nCREATE TRIGGER update_work_order_items_updated_at\r\n  BEFORE UPDATE ON work_order_items\r\n  FOR EACH ROW EXECUTE FUNCTION update_work_order_items_updated_at_column();\r\n\r\n-- Políticas RLS para work_orders\r\nALTER TABLE work_orders ENABLE ROW LEVEL SECURITY;\r\nCREATE POLICY \"Permitir todo acceso en work_orders\" ON work_orders\r\n  FOR ALL TO PUBLIC USING (true) WITH CHECK (true);\r\n\r\n-- Políticas RLS para work_order_items\r\nALTER TABLE work_order_items ENABLE ROW LEVEL SECURITY;\r\nCREATE POLICY \"Permitir todo acceso en work_order_items\" ON work_order_items\r\n  FOR ALL TO PUBLIC USING (true) WITH CHECK (true);\r\n\r\n-- Políticas RLS para work_order_consumption\r\nALTER TABLE work_order_consumption ENABLE ROW LEVEL SECURITY;\r\nCREATE POLICY \"Permitir todo acceso en work_order_consumption\" ON work_order_consumption\r\n  FOR ALL TO PUBLIC USING (true) WITH CHECK (true);\r\n\r\n-- Función para generar número de orden automáticamente\r\nCREATE OR REPLACE FUNCTION generate_work_order_number()\r\nRETURNS VARCHAR(50) AS $$\r\nDECLARE\r\n  current_year INTEGER;\r\n  current_month INTEGER;\r\n  sequence_number INTEGER;\r\n  result_order_number VARCHAR(50);\r\n  year_month_pattern VARCHAR(20);\r\nBEGIN\r\n  -- Usar la fecha actual para determinar el año-mes\r\n  current_year := EXTRACT(YEAR FROM NOW());\r\n  current_month := EXTRACT(MONTH FROM NOW());\r\n  year_month_pattern := 'OT-' || current_year || '-' || LPAD(current_month::TEXT, 2, '0') || '-%';\r\n\r\n  -- Obtener el último número de secuencia para el año-mes actual\r\n  -- Manejar tanto el formato antiguo (OT-YYYY-XXXX) como el nuevo (OT-YYYY-MM-XXX)\r\n  SELECT COALESCE(MAX(\r\n    CASE\r\n      WHEN work_orders.order_number LIKE 'OT-' || current_year || '-' || LPAD(current_month::TEXT, 2, '0') || '-%' THEN\r\n        CAST(SUBSTRING(work_orders.order_number FROM '[0-9]{3}$') AS INTEGER)\r\n      WHEN work_orders.order_number LIKE 'OT-' || current_year || '-%' AND work_orders.order_number NOT LIKE 'OT-' || current_year || '-' || LPAD(current_month::TEXT, 2, '0') || '-%' THEN\r\n        -- Para formato antiguo, extraer los últimos 4 dígitos\r\n        CAST(SUBSTRING(work_orders.order_number FROM '[0-9]{4}$') AS INTEGER)\r\n      ELSE 0\r\n    END\r\n  ), 0) + 1\r\n  INTO sequence_number\r\n  FROM work_orders\r\n  WHERE work_orders.order_number LIKE 'OT-' || current_year || '-%';\r\n\r\n  -- Generar el número de orden con formato OT-YYYY-MM-001\r\n  result_order_number := 'OT-' || current_year || '-' || LPAD(current_month::TEXT, 2, '0') || '-' || LPAD(sequence_number::TEXT, 3, '0');\r\n\r\n  RETURN result_order_number;\r\nEND;\r\n$$ LANGUAGE plpgsql;\r\n\r\n-- Función para verificar disponibilidad de materias primas para una OT\r\nCREATE OR REPLACE FUNCTION check_raw_materials_availability(work_order_uuid UUID)\r\nRETURNS TABLE (\r\n  raw_material_id UUID,\r\n  raw_material_name VARCHAR(255),\r\n  required_quantity DECIMAL(10,3),\r\n  available_quantity DECIMAL(10,3),\r\n  shortage_quantity DECIMAL(10,3),\r\n  is_available BOOLEAN\r\n) AS $$\r\nBEGIN\r\n  RETURN QUERY\r\n  SELECT\r\n    rm.id as raw_material_id,\r\n    rm.name as raw_material_name,\r\n    -- Calculate required quantity using rule of three instead of using stored consumption\r\n    SUM(\r\n      CASE\r\n        WHEN p.base_quantity > 0 THEN (pf.quantity * woi.planned_quantity / p.base_quantity)\r\n        ELSE pf.quantity\r\n      END\r\n    ) as required_quantity,\r\n    rm.current_stock as available_quantity,\r\n    GREATEST(0, SUM(\r\n      CASE\r\n        WHEN p.base_quantity > 0 THEN (pf.quantity * woi.planned_quantity / p.base_quantity)\r\n        ELSE pf.quantity\r\n      END\r\n    ) - rm.current_stock) as shortage_quantity,\r\n    (rm.current_stock >= SUM(\r\n      CASE\r\n        WHEN p.base_quantity > 0 THEN (pf.quantity * woi.planned_quantity / p.base_quantity)\r\n        ELSE pf.quantity\r\n      END\r\n    )) as is_available\r\n  FROM work_order_items woi\r\n  JOIN products p ON woi.product_id = p.id\r\n  JOIN product_formulas pf ON p.id = pf.product_id\r\n  JOIN raw_materials rm ON pf.raw_material_id = rm.id\r\n  WHERE woi.work_order_id = work_order_uuid\r\n  GROUP BY rm.id, rm.name, rm.current_stock\r\n  ORDER BY rm.name;\r\nEND;\r\n$$ LANGUAGE plpgsql;\r\n\r\n-- Función para obtener OT completa con productos y fórmulas\r\nCREATE OR REPLACE FUNCTION get_work_order_details(work_order_uuid UUID)\r\nRETURNS TABLE (\r\n  work_order_id UUID,\r\n  order_number VARCHAR(50),\r\n  work_order_description TEXT,\r\n  work_order_status VARCHAR(20),\r\n  work_order_priority VARCHAR(10),\r\n  planned_start_date DATE,\r\n  planned_end_date DATE,\r\n  actual_start_datetime TIMESTAMPTZ,\r\n  actual_end_datetime TIMESTAMPTZ,\r\n  -- Keep old fields for backward compatibility\r\n  actual_start_date DATE,\r\n  actual_end_date DATE,\r\n  work_order_created_at TIMESTAMPTZ,\r\n  item_id UUID,\r\n  product_id UUID,\r\n  product_name VARCHAR(255),\r\n  product_unit VARCHAR(50),\r\n  product_base_quantity DECIMAL(10,3),\r\n  planned_quantity DECIMAL(10,3),\r\n  produced_quantity DECIMAL(10,3),\r\n  item_status VARCHAR(20),\r\n  formula_raw_material_id UUID,\r\n  raw_material_name VARCHAR(255),\r\n  raw_material_unit VARCHAR(50),\r\n  raw_material_current_stock DECIMAL(10,3),\r\n  formula_quantity DECIMAL(10,3),\r\n  consumption_planned DECIMAL(10,3),\r\n  consumption_actual DECIMAL(10,3)\r\n) AS $$\r\nBEGIN\r\n  RETURN QUERY\r\n  SELECT\r\n    wo.id as work_order_id,\r\n    wo.order_number,\r\n    wo.description as work_order_description,\r\n    wo.status as work_order_status,\r\n    wo.priority as work_order_priority,\r\n    wo.planned_start_date,\r\n    wo.planned_end_date,\r\n    wo.actual_start_datetime,\r\n    wo.actual_end_datetime,\r\n    -- Keep old fields for backward compatibility\r\n    wo.actual_start_date,\r\n    wo.actual_end_date,\r\n    wo.created_at as work_order_created_at,\r\n    woi.id as item_id,\r\n    p.id as product_id,\r\n    p.name as product_name,\r\n    p.unit as product_unit,\r\n    p.base_quantity as product_base_quantity,\r\n    woi.planned_quantity,\r\n    woi.produced_quantity,\r\n    woi.status as item_status,\r\n    rm.id as formula_raw_material_id,\r\n    rm.name as raw_material_name,\r\n    rm.unit as raw_material_unit,\r\n    rm.current_stock as raw_material_current_stock,\r\n    -- Calculate adjusted formula quantity using rule of three: (base_formula_quantity * planned_quantity) / base_quantity\r\n    CASE\r\n      WHEN p.base_quantity > 0 AND p.base_quantity IS NOT NULL THEN ROUND((pf.quantity * woi.planned_quantity / p.base_quantity)::numeric, 3)\r\n      ELSE pf.quantity\r\n    END as formula_quantity,\r\n    -- Calculate required quantity using rule of three: (formula_quantity * planned_quantity) / base_quantity\r\n    CASE\r\n      WHEN p.base_quantity > 0 AND p.base_quantity IS NOT NULL THEN ROUND((pf.quantity * woi.planned_quantity / p.base_quantity)::numeric, 3)\r\n      ELSE pf.quantity\r\n    END as consumption_planned,\r\n    woc.actual_consumption\r\n  FROM work_orders wo\r\n  LEFT JOIN work_order_items woi ON wo.id = woi.work_order_id\r\n  LEFT JOIN products p ON woi.product_id = p.id\r\n  LEFT JOIN product_formulas pf ON p.id = pf.product_id\r\n  LEFT JOIN raw_materials rm ON pf.raw_material_id = rm.id\r\n  LEFT JOIN work_order_consumption woc ON woi.id = woc.work_order_item_id AND rm.id = woc.raw_material_id\r\n  WHERE wo.id = work_order_uuid\r\n  ORDER BY p.name, rm.name;\r\nEND;\r\n$$ LANGUAGE plpgsql;\r\n\r\n-- Función para calcular consumo planificado basado en fórmula del producto\r\nCREATE OR REPLACE FUNCTION calculate_planned_consumption(\r\n  p_product_id UUID,\r\n  p_quantity DECIMAL(10,3)\r\n)\r\nRETURNS TABLE (\r\n  raw_material_id UUID,\r\n  consumption_quantity DECIMAL(10,3),\r\n  unit VARCHAR(50)\r\n) AS $$\r\nBEGIN\r\n  RETURN QUERY\r\n  SELECT\r\n    pf.raw_material_id,\r\n    (pf.quantity * p_quantity / p.base_quantity) as consumption_quantity,\r\n    rm.unit\r\n  FROM product_formulas pf\r\n  JOIN products p ON pf.product_id = p.id\r\n  JOIN raw_materials rm ON pf.raw_material_id = rm.id\r\n  WHERE pf.product_id = p_product_id;\r\nEND;\r\n$$ LANGUAGE plpgsql;\r\n\r\n-- Función para generar número de orden basado en fecha planificada\r\nCREATE OR REPLACE FUNCTION generate_work_order_number_for_date(\r\n  p_planned_start_date DATE\r\n)\r\nRETURNS VARCHAR(50) AS $$\r\nDECLARE\r\n  target_year INTEGER;\r\n  target_month INTEGER;\r\n  sequence_number INTEGER;\r\n  result_order_number VARCHAR(50);\r\nBEGIN\r\n  -- Usar la fecha planificada para determinar el año-mes\r\n  target_year := EXTRACT(YEAR FROM p_planned_start_date);\r\n  target_month := EXTRACT(MONTH FROM p_planned_start_date);\r\n\r\n  -- Obtener el último número de secuencia para el año-mes de la fecha planificada\r\n  -- Manejar tanto el formato antiguo (OT-YYYY-XXXX) como el nuevo (OT-YYYY-MM-XXX)\r\n  SELECT COALESCE(MAX(\r\n    CASE\r\n      WHEN work_orders.order_number LIKE 'OT-' || target_year || '-' || LPAD(target_month::TEXT, 2, '0') || '-%' THEN\r\n        CAST(SUBSTRING(work_orders.order_number FROM '[0-9]{3}$') AS INTEGER)\r\n      WHEN work_orders.order_number LIKE 'OT-' || target_year || '-%' AND work_orders.order_number NOT LIKE 'OT-' || target_year || '-' || LPAD(target_month::TEXT, 2, '0') || '-%' THEN\r\n        -- Para formato antiguo, extraer los últimos 4 dígitos\r\n        CAST(SUBSTRING(work_orders.order_number FROM '[0-9]{4}$') AS INTEGER)\r\n      ELSE 0\r\n    END\r\n  ), 0) + 1\r\n  INTO sequence_number\r\n  FROM work_orders\r\n  WHERE work_orders.order_number LIKE 'OT-' || target_year || '-%';\r\n\r\n  -- Generar el número de orden con formato OT-YYYY-MM-001\r\n  result_order_number := 'OT-' || target_year || '-' || LPAD(target_month::TEXT, 2, '0') || '-' || LPAD(sequence_number::TEXT, 3, '0');\r\n\r\n  RETURN result_order_number;\r\nEND;\r\n$$ LANGUAGE plpgsql;\r\n"
+      },
+      {
+        "filename": "005_add_unit_price_to_inventory_entries.sql",
+        "content": "-- Agregar columna unit_price a inventory_entries\r\nALTER TABLE inventory_entries\r\nADD COLUMN IF NOT EXISTS unit_price DECIMAL(10,2) DEFAULT 0;\r\n\r\n-- Agregar índice para mejor rendimiento en consultas por precio\r\nCREATE INDEX IF NOT EXISTS idx_inventory_entries_unit_price ON inventory_entries(unit_price);\r\n\r\n-- Agregar comentario a la columna para documentación\r\nCOMMENT ON COLUMN inventory_entries.unit_price IS 'Precio unitario de la materia prima en la entrada/salida de inventario (opcional)';"
+      },
+      {
+        "filename": "006_create_product_analyses_tables.sql",
+        "content": "-- Crear tabla para análisis de productos terminados\r\n-- Migración 006: Sistema de análisis de productos\r\n\r\n-- Crear tabla de análisis de productos\r\nCREATE TABLE IF NOT EXISTS product_analyses (\r\n  id UUID DEFAULT gen_random_uuid() PRIMARY KEY,\r\n  work_order_id UUID NOT NULL REFERENCES work_orders(id) ON DELETE CASCADE,\r\n  work_order_item_id UUID,\r\n  analysis_number VARCHAR(6) NOT NULL UNIQUE,\r\n  analysis_type VARCHAR(50) NOT NULL DEFAULT 'general',\r\n  file_path VARCHAR(500),\r\n  file_name VARCHAR(255),\r\n  analysis_date DATE NOT NULL DEFAULT CURRENT_DATE,\r\n  notes TEXT,\r\n  created_by VARCHAR(255),\r\n  created_at TIMESTAMPTZ DEFAULT NOW(),\r\n  updated_at TIMESTAMPTZ DEFAULT NOW()\r\n);\r\n\r\n-- Índices para mejor rendimiento\r\nCREATE INDEX IF NOT EXISTS idx_product_analyses_work_order_id ON product_analyses(work_order_id);\r\nCREATE INDEX IF NOT EXISTS idx_product_analyses_work_order_item_id ON product_analyses(work_order_item_id);\r\nCREATE INDEX IF NOT EXISTS idx_product_analyses_analysis_number ON product_analyses(analysis_number);\r\nCREATE INDEX IF NOT EXISTS idx_product_analyses_analysis_date ON product_analyses(analysis_date DESC);\r\nCREATE INDEX IF NOT EXISTS idx_product_analyses_analysis_type ON product_analyses(analysis_type);\r\n\r\n-- Eliminar trigger si existe antes de crearlo\r\nDROP TRIGGER IF EXISTS update_product_analyses_updated_at ON product_analyses;\r\nDROP TRIGGER IF EXISTS update_product_analyses_updated_at_column ON product_analyses;\r\n\r\n-- Crear trigger para actualizar updated_at en product_analyses\r\nCREATE OR REPLACE FUNCTION update_product_analyses_updated_at_column()\r\nRETURNS TRIGGER AS $$\r\nBEGIN\r\n  NEW.updated_at = NOW();\r\n  RETURN NEW;\r\nEND;\r\n$$ language 'plpgsql';\r\n\r\nCREATE TRIGGER update_product_analyses_updated_at\r\n  BEFORE UPDATE ON product_analyses\r\n  FOR EACH ROW EXECUTE FUNCTION update_product_analyses_updated_at_column();\r\n\r\n-- Políticas RLS para product_analyses\r\nALTER TABLE product_analyses ENABLE ROW LEVEL SECURITY;\r\n\r\n-- Eliminar política si existe antes de crearla\r\nDROP POLICY IF EXISTS \"Permitir todo acceso en product_analyses\" ON product_analyses;\r\n\r\nCREATE POLICY \"Permitir todo acceso en product_analyses\" ON product_analyses\r\n  FOR ALL TO PUBLIC USING (true) WITH CHECK (true);\r\n\r\n-- Función para generar número de análisis único de 6 dígitos\r\nCREATE OR REPLACE FUNCTION generate_analysis_number()\r\nRETURNS VARCHAR(6) AS $$\r\nDECLARE\r\n  result_number VARCHAR(6);\r\n  attempts INTEGER := 0;\r\n  max_attempts INTEGER := 100;\r\nBEGIN\r\n  -- Intentar generar un número único hasta max_attempts veces\r\n  WHILE attempts < max_attempts LOOP\r\n    -- Generar número aleatorio de 6 dígitos (100000-999999)\r\n    result_number := LPAD((100000 + floor(random() * 900000))::TEXT, 6, '0');\r\n\r\n    -- Verificar si ya existe\r\n    IF NOT EXISTS (SELECT 1 FROM product_analyses WHERE analysis_number = result_number) THEN\r\n      RETURN result_number;\r\n    END IF;\r\n\r\n    attempts := attempts + 1;\r\n  END LOOP;\r\n\r\n  -- Si no se pudo generar un número único después de max_attempts, usar timestamp\r\n  result_number := LPAD(EXTRACT(EPOCH FROM NOW())::INTEGER % 1000000, 6, '0');\r\n  RETURN result_number;\r\nEND;\r\n$$ LANGUAGE plpgsql;\r\n\r\n-- Función para obtener análisis de una orden de trabajo\r\nCREATE OR REPLACE FUNCTION get_work_order_analyses(work_order_uuid UUID)\r\nRETURNS TABLE (\r\n  analysis_id UUID,\r\n  analysis_number VARCHAR(6),\r\n  analysis_type VARCHAR(50),\r\n  file_name VARCHAR(255),\r\n  analysis_date DATE,\r\n  notes TEXT,\r\n  created_at TIMESTAMPTZ,\r\n  work_order_item_id UUID,\r\n  product_name VARCHAR(255),\r\n  product_unit VARCHAR(50)\r\n) AS $$\r\nBEGIN\r\n  RETURN QUERY\r\n  SELECT\r\n    pa.id as analysis_id,\r\n    pa.analysis_number,\r\n    pa.analysis_type,\r\n    pa.file_name,\r\n    pa.analysis_date,\r\n    pa.notes,\r\n    pa.created_at,\r\n    pa.work_order_item_id,\r\n    p.name as product_name,\r\n    p.unit as product_unit\r\n  FROM product_analyses pa\r\n  JOIN work_order_items woi ON pa.work_order_item_id = woi.id\r\n  JOIN products p ON woi.product_id = p.id\r\n  WHERE pa.work_order_id = work_order_uuid\r\n  ORDER BY pa.created_at DESC;\r\nEND;\r\n$$ LANGUAGE plpgsql;\r\n"
+      },
+      {
+        "filename": "007_fix_product_analyses_structure.sql",
+        "content": "-- Migración 007: Corregir estructura de análisis de productos\r\n-- Los análisis deben ser de la formulación completa, no de productos individuales\r\n\r\n-- Agregar columna para descripción del análisis (opcional)\r\nALTER TABLE product_analyses ADD COLUMN IF NOT EXISTS description TEXT;\r\n\r\n-- Quitar la restricción de work_order_item_id ya que los análisis son de la OT completa\r\nALTER TABLE product_analyses DROP CONSTRAINT IF EXISTS product_analyses_work_order_item_id_fkey;\r\nALTER TABLE product_analyses DROP COLUMN IF EXISTS work_order_item_id;\r\n\r\n-- Actualizar índices (quitar el índice de work_order_item_id)\r\nDROP INDEX IF EXISTS idx_product_analyses_work_order_item_id;\r\n\r\n-- Eliminar la función existente antes de recrearla con nueva signatura\r\nDROP FUNCTION IF EXISTS get_work_order_analyses(UUID);\r\n\r\n-- Función actualizada para obtener análisis de una orden de trabajo\r\n-- Ahora sin JOIN con productos específicos\r\nCREATE FUNCTION get_work_order_analyses(work_order_uuid UUID)\r\nRETURNS TABLE (\r\n  analysis_id UUID,\r\n  analysis_number VARCHAR(6),\r\n  analysis_type VARCHAR(50),\r\n  file_name VARCHAR(255),\r\n  analysis_date DATE,\r\n  notes TEXT,\r\n  description TEXT,\r\n  created_at TIMESTAMPTZ,\r\n  created_by VARCHAR(255)\r\n) AS $$\r\nBEGIN\r\n  RETURN QUERY\r\n  SELECT\r\n    pa.id as analysis_id,\r\n    pa.analysis_number,\r\n    pa.analysis_type,\r\n    pa.file_name,\r\n    pa.analysis_date,\r\n    pa.notes,\r\n    pa.description,\r\n    pa.created_at,\r\n    pa.created_by\r\n  FROM product_analyses pa\r\n  WHERE pa.work_order_id = work_order_uuid\r\n  ORDER BY pa.created_at DESC;\r\nEND;\r\n$$ LANGUAGE plpgsql;\r\n\r\n-- Actualizar comentarios en la tabla\r\nCOMMENT ON TABLE product_analyses IS 'Tabla de análisis de productos terminados - análisis de la formulación completa de una orden de trabajo';\r\nCOMMENT ON COLUMN product_analyses.work_order_id IS 'ID de la orden de trabajo (análisis de toda la formulación)';\r\nCOMMENT ON COLUMN product_analyses.description IS 'Descripción opcional del análisis';\r\n"
+      },
+      {
+        "filename": "008_add_description_to_product_analyses.sql",
+        "content": "-- Migración 008: Agregar columna description a product_analyses\r\n-- Soluciona problema de error 400 - columna no encontrada en schema cache\r\n\r\nALTER TABLE product_analyses\r\nADD COLUMN IF NOT EXISTS description TEXT;\r\n\r\n-- Agregar comentario a la columna\r\nCOMMENT ON COLUMN product_analyses.description IS 'Descripción detallada del análisis de producto';\r\n\r\n-- Crear índice para búsqueda en la descripción\r\nCREATE INDEX IF NOT EXISTS idx_product_analyses_description ON product_analyses USING gin(to_tsvector('spanish', description));\r\n\r\nCOMMIT;"
+      }
+    ],
+    "tables": [
+      "raw_materials",
+      "products",
+      "product_formulas",
+      "formula_items",
+      "work_orders",
+      "work_order_analyses",
+      "inventory_entries",
+      "product_analyses"
+    ]
+  },
+  "data": {
+    "raw_materials": [
+      {
+        "id": "6484b13e-e10f-4eaa-aa9f-2db118bf0dc1",
+        "code": "dasdas",
+        "name": "dasdas",
+        "description": "",
+        "unit": "unidad",
+        "current_stock": 300,
+        "min_stock": 0,
+        "max_stock": 5000,
+        "location": "dasd",
+        "supplier": "dasda",
+        "is_active": true,
+        "created_at": "2025-08-31T15:35:17.186+00:00",
+        "updated_at": "2025-09-04T17:23:22.068526+00:00"
+      },
+      {
+        "id": "39cb4672-992a-48da-b1ec-184b264acca8",
+        "code": "czc",
+        "name": "cxzcz",
+        "description": "fsd",
+        "unit": "kg",
+        "current_stock": -1589,
+        "min_stock": 20,
+        "max_stock": 7000,
+        "location": "czxc",
+        "supplier": "cxzc",
+        "is_active": true,
+        "created_at": "2025-08-31T15:27:54.356+00:00",
+        "updated_at": "2025-09-04T20:50:35.065703+00:00"
+      },
+      {
+        "id": "c88d7765-cf12-480a-bd2b-1d3f686ee668",
+        "code": "43432",
+        "name": "gbf dsfsdf s sfd",
+        "description": null,
+        "unit": "litro",
+        "current_stock": 1960,
+        "min_stock": 0,
+        "max_stock": 70000,
+        "location": "33ewr",
+        "supplier": "fsd",
+        "is_active": true,
+        "created_at": "2025-08-31T16:26:48.898+00:00",
+        "updated_at": "2025-09-04T20:50:35.51781+00:00"
+      }
+    ],
+    "products": [
+      {
+        "id": "2fbc8353-fe32-46a4-ba18-25d68a4cf219",
+        "name": "aaaa",
+        "description": "aaa",
+        "unit": "kg",
+        "base_quantity": 100,
+        "is_active": true,
+        "created_at": "2025-08-31T17:27:06.604+00:00",
+        "updated_at": "2025-08-31T19:12:21.50654+00:00"
+      },
+      {
+        "id": "cbcae268-c006-439d-886b-5ef31a3025de",
+        "name": "Josep Beltran",
+        "description": "dssf",
+        "unit": "litro",
+        "base_quantity": 1000,
+        "is_active": true,
+        "created_at": "2025-08-31T17:14:34.767+00:00",
+        "updated_at": "2025-08-31T20:38:25.197354+00:00"
+      },
+      {
+        "id": "452a5dd5-27d4-46fd-a733-bcf5ea8a06af",
+        "name": "jhgkjhgj",
+        "description": null,
+        "unit": "unidad",
+        "base_quantity": 1,
+        "is_active": true,
+        "created_at": "2025-09-04T19:48:54.641+00:00",
+        "updated_at": "2025-09-04T19:48:54.641+00:00"
+      }
+    ],
+    "product_formulas": [
+      {
+        "id": "0fba2104-8e46-48b2-b38f-2a6c0fb99b6c",
+        "product_id": "2fbc8353-fe32-46a4-ba18-25d68a4cf219",
+        "raw_material_id": "c88d7765-cf12-480a-bd2b-1d3f686ee668",
+        "quantity": 40,
+        "created_at": "2025-08-31T18:37:41.666974+00:00"
+      },
+      {
+        "id": "39252067-cb70-48e1-86b6-94b9635ffcf8",
+        "product_id": "2fbc8353-fe32-46a4-ba18-25d68a4cf219",
+        "raw_material_id": "39cb4672-992a-48da-b1ec-184b264acca8",
+        "quantity": 200,
+        "created_at": "2025-08-31T18:38:14.504328+00:00"
+      },
+      {
+        "id": "cad49abd-d06c-4de0-9ede-34cd6c85e54d",
+        "product_id": "cbcae268-c006-439d-886b-5ef31a3025de",
+        "raw_material_id": "c88d7765-cf12-480a-bd2b-1d3f686ee668",
+        "quantity": 10,
+        "created_at": "2025-08-31T20:38:43.483931+00:00"
+      },
+      {
+        "id": "50a47669-8691-4671-adce-5bd5a77050d0",
+        "product_id": "452a5dd5-27d4-46fd-a733-bcf5ea8a06af",
+        "raw_material_id": "c88d7765-cf12-480a-bd2b-1d3f686ee668",
+        "quantity": 500,
+        "created_at": "2025-09-04T20:30:35.952383+00:00"
+      }
+    ],
+    "formula_items": [],
+    "work_orders": [
+      {
+        "id": "c91cc653-d5c7-4e28-a7c6-a0ff5c0cbe27",
+        "order_number": "OT-2025-09-006",
+        "description": "bffdgdgfd",
+        "status": "in_progress",
+        "priority": "normal",
+        "planned_start_date": "2025-08-13",
+        "planned_end_date": "2025-08-14",
+        "notes": null,
+        "created_by": "Sistema",
+        "created_at": "2025-09-01T03:35:46.587+00:00",
+        "updated_at": "2025-09-01T03:35:57.93163+00:00",
+        "actual_start_date": "2025-09-01T03:35:56.823+00:00",
+        "actual_end_date": null,
+        "actual_start_datetime": "2025-09-01T03:35:56.823+00:00",
+        "actual_end_datetime": null
+      },
+      {
+        "id": "186d0207-c954-4059-9c19-d71d7debf25b",
+        "order_number": "OT-2025-09-004",
+        "description": "adsdasdasdas",
+        "status": "completed",
+        "priority": "normal",
+        "planned_start_date": "2025-08-13",
+        "planned_end_date": "2025-08-15",
+        "notes": null,
+        "created_by": "Sistema",
+        "created_at": "2025-09-01T03:30:44.74+00:00",
+        "updated_at": "2025-09-01T03:47:53.924869+00:00",
+        "actual_start_date": "2025-09-01T03:30:50.307+00:00",
+        "actual_end_date": "2025-09-01T03:47:52.812+00:00",
+        "actual_start_datetime": "2025-09-01T03:30:50.307+00:00",
+        "actual_end_datetime": "2025-09-01T03:47:52.812+00:00"
+      },
+      {
+        "id": "c90094d5-86f0-4d69-8d0b-3c62614b24bf",
+        "order_number": "OT-2025-09-008",
+        "description": "sdfsdf",
+        "status": "pending",
+        "priority": "normal",
+        "planned_start_date": "2025-09-02",
+        "planned_end_date": "2025-09-10",
+        "notes": null,
+        "created_by": "Sistema",
+        "created_at": "2025-09-04T12:18:34.538+00:00",
+        "updated_at": "2025-09-04T12:18:34.538+00:00",
+        "actual_start_date": null,
+        "actual_end_date": null,
+        "actual_start_datetime": null,
+        "actual_end_datetime": null
+      },
+      {
+        "id": "d412a091-ca22-4f2d-a820-bf01f1b6c2c0",
+        "order_number": "OT-2025-09-001",
+        "description": "dasdsadsadsa",
+        "status": "completed",
+        "priority": "normal",
+        "planned_start_date": "2025-08-12",
+        "planned_end_date": "2025-08-20",
+        "notes": null,
+        "created_by": "Sistema",
+        "created_at": "2025-09-01T03:17:18.966+00:00",
+        "updated_at": "2025-09-01T03:17:42.639425+00:00",
+        "actual_start_date": "2025-09-01T03:17:30.926+00:00",
+        "actual_end_date": "2025-09-01T03:17:41.524+00:00",
+        "actual_start_datetime": null,
+        "actual_end_datetime": null
+      },
+      {
+        "id": "b27ebc9b-8794-4f91-b099-7bdd6492bb36",
+        "order_number": "OT-2025-09-007",
+        "description": "afdsfsdf",
+        "status": "completed",
+        "priority": "normal",
+        "planned_start_date": "2025-09-10",
+        "planned_end_date": "2025-09-12",
+        "notes": null,
+        "created_by": "Sistema",
+        "created_at": "2025-09-04T12:16:57.33+00:00",
+        "updated_at": "2025-09-04T12:21:36.50153+00:00",
+        "actual_start_date": "2025-09-04T12:17:38.804+00:00",
+        "actual_end_date": "2025-09-04T12:21:35.872+00:00",
+        "actual_start_datetime": "2025-09-04T12:17:38.804+00:00",
+        "actual_end_datetime": "2025-09-04T12:21:35.872+00:00"
+      },
+      {
+        "id": "97abfae5-18fb-415a-8328-d1ac9f6d0c6b",
+        "order_number": "OT-2025-09-003",
+        "description": "Test orden para verificar fechas",
+        "status": "completed",
+        "priority": "normal",
+        "planned_start_date": "2025-09-02",
+        "planned_end_date": "2025-09-05",
+        "notes": null,
+        "created_by": "Sistema",
+        "created_at": "2025-09-01T03:19:53.657+00:00",
+        "updated_at": "2025-09-01T03:21:55.620311+00:00",
+        "actual_start_date": "2025-09-01T03:21:35.291+00:00",
+        "actual_end_date": "2025-09-01T03:21:54.511+00:00",
+        "actual_start_datetime": "2025-09-01T03:21:35.291+00:00",
+        "actual_end_datetime": "2025-09-01T03:21:54.511+00:00"
+      },
+      {
+        "id": "e33f82f7-8bed-430f-98b1-bf869e1d0184",
+        "order_number": "OT-2025-09-002",
+        "description": "Test orden para verificar fechas",
+        "status": "completed",
+        "priority": "normal",
+        "planned_start_date": "2025-09-02",
+        "planned_end_date": "2025-09-05",
+        "notes": null,
+        "created_by": "Sistema",
+        "created_at": "2025-09-01T03:19:36.995+00:00",
+        "updated_at": "2025-09-01T03:27:55.8236+00:00",
+        "actual_start_date": "2025-09-01T03:27:34.191+00:00",
+        "actual_end_date": "2025-09-01T03:27:54.716+00:00",
+        "actual_start_datetime": "2025-09-01T03:27:34.191+00:00",
+        "actual_end_datetime": "2025-09-01T03:27:54.716+00:00"
+      },
+      {
+        "id": "e0b24ef0-7480-430f-b19b-33d5288a043f",
+        "order_number": "OT-2025-09-005",
+        "description": "sdasdsa",
+        "status": "in_progress",
+        "priority": "normal",
+        "planned_start_date": "2025-08-05",
+        "planned_end_date": "2025-08-14",
+        "notes": null,
+        "created_by": "Sistema",
+        "created_at": "2025-09-01T03:32:00.825+00:00",
+        "updated_at": "2025-09-01T03:32:24.707247+00:00",
+        "actual_start_date": "2025-09-01T03:32:23.594+00:00",
+        "actual_end_date": null,
+        "actual_start_datetime": "2025-09-01T03:32:23.594+00:00",
+        "actual_end_datetime": null
+      },
+      {
+        "id": "7e51adca-00b1-4a35-b4ad-95497614027f",
+        "order_number": "OT-2025-09-010",
+        "description": "nvbnbn",
+        "status": "pending",
+        "priority": "normal",
+        "planned_start_date": "2025-09-16",
+        "planned_end_date": "2025-09-25",
+        "notes": null,
+        "created_by": "Sistema",
+        "created_at": "2025-09-04T19:19:13.145+00:00",
+        "updated_at": "2025-09-04T19:19:13.145+00:00",
+        "actual_start_date": null,
+        "actual_end_date": null,
+        "actual_start_datetime": null,
+        "actual_end_datetime": null
+      },
+      {
+        "id": "210f1cac-8f94-418e-a795-fcc9152eb1c6",
+        "order_number": "OT-2025-09-009",
+        "description": "fsdfdsfsd",
+        "status": "completed",
+        "priority": "normal",
+        "planned_start_date": "2025-09-02",
+        "planned_end_date": "2025-09-12",
+        "notes": null,
+        "created_by": "Sistema",
+        "created_at": "2025-09-04T17:54:25.129+00:00",
+        "updated_at": "2025-09-04T20:50:37.611+00:00",
+        "actual_start_date": "2025-09-04T20:50:34.851+00:00",
+        "actual_end_date": "2025-09-04T20:50:36.843+00:00",
+        "actual_start_datetime": "2025-09-04T20:50:34.851+00:00",
+        "actual_end_datetime": "2025-09-04T20:50:36.843+00:00"
+      }
+    ],
+    "work_order_analyses": [],
+    "inventory_entries": [
+      {
+        "id": "7ffae53b-fe3a-4e76-9630-227791d84057",
+        "raw_material_id": "39cb4672-992a-48da-b1ec-184b264acca8",
+        "quantity": 500,
+        "entry_type": "in",
+        "movement_date": "2025-08-31T15:33:00+00:00",
+        "notes": null,
+        "user_id": null,
+        "created_at": "2025-08-31T15:33:52.326546+00:00",
+        "unit_price": 0
+      },
+      {
+        "id": "3a105a09-abca-449d-9c2a-15c8595f8ce6",
+        "raw_material_id": "39cb4672-992a-48da-b1ec-184b264acca8",
+        "quantity": 44,
+        "entry_type": "in",
+        "movement_date": "2025-08-31T15:34:00+00:00",
+        "notes": "sdfs",
+        "user_id": null,
+        "created_at": "2025-08-31T15:34:09.086122+00:00",
+        "unit_price": 0
+      },
+      {
+        "id": "a78e2a0f-d792-4231-bd92-b6a9093f2c23",
+        "raw_material_id": "39cb4672-992a-48da-b1ec-184b264acca8",
+        "quantity": 500,
+        "entry_type": "in",
+        "movement_date": "2025-08-13T15:34:00+00:00",
+        "notes": null,
+        "user_id": null,
+        "created_at": "2025-08-31T15:34:44.113387+00:00",
+        "unit_price": 0
+      },
+      {
+        "id": "15b42007-4dc9-493a-9e36-50f36da9b6d7",
+        "raw_material_id": "39cb4672-992a-48da-b1ec-184b264acca8",
+        "quantity": 30,
+        "entry_type": "in",
+        "movement_date": "2025-08-31T15:41:00+00:00",
+        "notes": null,
+        "user_id": null,
+        "created_at": "2025-08-31T15:41:22.263541+00:00",
+        "unit_price": 0
+      },
+      {
+        "id": "bed5c627-29d3-48ce-8c9e-0ab92e188d05",
+        "raw_material_id": "39cb4672-992a-48da-b1ec-184b264acca8",
+        "quantity": 30,
+        "entry_type": "in",
+        "movement_date": "2025-08-31T15:50:00+00:00",
+        "notes": null,
+        "user_id": null,
+        "created_at": "2025-08-31T15:50:56.644219+00:00",
+        "unit_price": 0
+      },
+      {
+        "id": "b1c1a391-5db4-4274-b70e-a027c1c70fc9",
+        "raw_material_id": "39cb4672-992a-48da-b1ec-184b264acca8",
+        "quantity": 44,
+        "entry_type": "in",
+        "movement_date": "2025-08-31T16:02:00+00:00",
+        "notes": null,
+        "user_id": null,
+        "created_at": "2025-08-31T16:02:45.438352+00:00",
+        "unit_price": 0
+      },
+      {
+        "id": "2ba6c279-c940-4e09-9a90-43f15f84500d",
+        "raw_material_id": "39cb4672-992a-48da-b1ec-184b264acca8",
+        "quantity": 22,
+        "entry_type": "in",
+        "movement_date": "2025-08-31T16:02:00+00:00",
+        "notes": null,
+        "user_id": null,
+        "created_at": "2025-08-31T16:02:49.437743+00:00",
+        "unit_price": 0
+      },
+      {
+        "id": "6574e5aa-3849-480b-be93-3d52bdab0f48",
+        "raw_material_id": "39cb4672-992a-48da-b1ec-184b264acca8",
+        "quantity": 55,
+        "entry_type": "out",
+        "movement_date": "2025-08-31T16:22:00+00:00",
+        "notes": null,
+        "user_id": null,
+        "created_at": "2025-08-31T16:23:03.61408+00:00",
+        "unit_price": 0
+      },
+      {
+        "id": "d6724af7-ae30-4ec5-8717-148d9eacd305",
+        "raw_material_id": "c88d7765-cf12-480a-bd2b-1d3f686ee668",
+        "quantity": 500,
+        "entry_type": "in",
+        "movement_date": "2025-08-31T16:26:00+00:00",
+        "notes": null,
+        "user_id": null,
+        "created_at": "2025-08-31T16:26:57.785986+00:00",
+        "unit_price": 0
+      },
+      {
+        "id": "bafc9208-4aac-4e08-b2c7-de295c796e1a",
+        "raw_material_id": "c88d7765-cf12-480a-bd2b-1d3f686ee668",
+        "quantity": 20,
+        "entry_type": "in",
+        "movement_date": "2025-09-01T01:20:00+00:00",
+        "notes": null,
+        "user_id": null,
+        "created_at": "2025-09-01T01:20:36.24966+00:00",
+        "unit_price": 0
+      },
+      {
+        "id": "7952b866-9caf-472a-a285-8d3f7f16cac6",
+        "raw_material_id": "c88d7765-cf12-480a-bd2b-1d3f686ee668",
+        "quantity": 10,
+        "entry_type": "out",
+        "movement_date": "2025-09-01T01:40:43.543+00:00",
+        "notes": "Salida por inicio de OT OT-2025-1770373 - gbf dsfsdf s sfd",
+        "user_id": null,
+        "created_at": "2025-09-01T01:40:44.619577+00:00",
+        "unit_price": 0
+      },
+      {
+        "id": "5fe88787-89fb-421a-b3e0-8f72a28c81de",
+        "raw_material_id": "39cb4672-992a-48da-b1ec-184b264acca8",
+        "quantity": 200,
+        "entry_type": "out",
+        "movement_date": "2025-09-01T01:42:19.475+00:00",
+        "notes": "Salida por inicio de OT OT-2025-8083272 - cxzcz",
+        "user_id": null,
+        "created_at": "2025-09-01T01:42:20.563527+00:00",
+        "unit_price": 0
+      },
+      {
+        "id": "18e329f9-14e4-4a67-a78c-4e6b42af31c5",
+        "raw_material_id": "c88d7765-cf12-480a-bd2b-1d3f686ee668",
+        "quantity": 40,
+        "entry_type": "out",
+        "movement_date": "2025-09-01T01:42:19.898+00:00",
+        "notes": "Salida por inicio de OT OT-2025-8083272 - gbf dsfsdf s sfd",
+        "user_id": null,
+        "created_at": "2025-09-01T01:42:20.981674+00:00",
+        "unit_price": 0
+      },
+      {
+        "id": "dbfc4cd7-c01b-4efd-8c68-3b7956ccd5e2",
+        "raw_material_id": "c88d7765-cf12-480a-bd2b-1d3f686ee668",
+        "quantity": 10,
+        "entry_type": "out",
+        "movement_date": "2025-09-01T02:08:57.306+00:00",
+        "notes": "Salida por inicio de OT OT-2025-7913872 - gbf dsfsdf s sfd",
+        "user_id": null,
+        "created_at": "2025-09-01T02:08:58.38327+00:00",
+        "unit_price": 0
+      },
+      {
+        "id": "c11713a2-c0a0-43ae-bb01-8e4b4527d351",
+        "raw_material_id": "39cb4672-992a-48da-b1ec-184b264acca8",
+        "quantity": 200,
+        "entry_type": "out",
+        "movement_date": "2025-09-01T02:38:50.559+00:00",
+        "notes": "OT-2025-09-001 - cxzcz",
+        "user_id": null,
+        "created_at": "2025-09-01T02:38:51.658813+00:00",
+        "unit_price": 0
+      },
+      {
+        "id": "73db25ca-e5a8-4e42-b6e6-9ff225cc7aec",
+        "raw_material_id": "c88d7765-cf12-480a-bd2b-1d3f686ee668",
+        "quantity": 40,
+        "entry_type": "out",
+        "movement_date": "2025-09-01T02:38:50.966+00:00",
+        "notes": "OT-2025-09-001 - gbf dsfsdf s sfd",
+        "user_id": null,
+        "created_at": "2025-09-01T02:38:52.065142+00:00",
+        "unit_price": 0
+      },
+      {
+        "id": "4e374f6a-242f-4549-8ae8-05512405273b",
+        "raw_material_id": "39cb4672-992a-48da-b1ec-184b264acca8",
+        "quantity": 200,
+        "entry_type": "out",
+        "movement_date": "2025-09-01T02:45:24.681+00:00",
+        "notes": "OT-2025-09-002 - cxzcz",
+        "user_id": null,
+        "created_at": "2025-09-01T02:45:25.775027+00:00",
+        "unit_price": 0
+      },
+      {
+        "id": "c39c57c8-f0b7-497a-9784-6449b1592cd8",
+        "raw_material_id": "c88d7765-cf12-480a-bd2b-1d3f686ee668",
+        "quantity": 40,
+        "entry_type": "out",
+        "movement_date": "2025-09-01T02:45:25.074+00:00",
+        "notes": "OT-2025-09-002 - gbf dsfsdf s sfd",
+        "user_id": null,
+        "created_at": "2025-09-01T02:45:26.162177+00:00",
+        "unit_price": 0
+      },
+      {
+        "id": "4c5c08b5-d8fd-4418-a1c4-1b4594c67717",
+        "raw_material_id": "39cb4672-992a-48da-b1ec-184b264acca8",
+        "quantity": 200,
+        "entry_type": "out",
+        "movement_date": "2025-09-01T02:51:29.725+00:00",
+        "notes": "OT-2025-09-003 - cxzcz",
+        "user_id": null,
+        "created_at": "2025-09-01T02:51:30.825836+00:00",
+        "unit_price": 0
+      },
+      {
+        "id": "5527152d-0568-4414-b0f8-5357c8769f86",
+        "raw_material_id": "c88d7765-cf12-480a-bd2b-1d3f686ee668",
+        "quantity": 40,
+        "entry_type": "out",
+        "movement_date": "2025-09-01T02:51:30.146+00:00",
+        "notes": "OT-2025-09-003 - gbf dsfsdf s sfd",
+        "user_id": null,
+        "created_at": "2025-09-01T02:51:31.240419+00:00",
+        "unit_price": 0
+      },
+      {
+        "id": "66c6378d-c636-4833-ac0b-07bafafb9afc",
+        "raw_material_id": "c88d7765-cf12-480a-bd2b-1d3f686ee668",
+        "quantity": 10,
+        "entry_type": "out",
+        "movement_date": "2025-09-01T02:51:56.895+00:00",
+        "notes": "OT-2025-09-004 - gbf dsfsdf s sfd",
+        "user_id": null,
+        "created_at": "2025-09-01T02:51:57.990063+00:00",
+        "unit_price": 0
+      },
+      {
+        "id": "f665fb30-3e93-4309-bb5b-0615fdb9559f",
+        "raw_material_id": "39cb4672-992a-48da-b1ec-184b264acca8",
+        "quantity": 200,
+        "entry_type": "out",
+        "movement_date": "2025-09-01T02:56:48.546+00:00",
+        "notes": "OT-2025-09-005 - cxzcz",
+        "user_id": null,
+        "created_at": "2025-09-01T02:56:49.638585+00:00",
+        "unit_price": 0
+      },
+      {
+        "id": "1f461a9b-4dd9-4c0e-b0a8-72e328124a34",
+        "raw_material_id": "c88d7765-cf12-480a-bd2b-1d3f686ee668",
+        "quantity": 40,
+        "entry_type": "out",
+        "movement_date": "2025-09-01T02:56:48.981+00:00",
+        "notes": "OT-2025-09-005 - gbf dsfsdf s sfd",
+        "user_id": null,
+        "created_at": "2025-09-01T02:56:50.069348+00:00",
+        "unit_price": 0
+      },
+      {
+        "id": "ba696302-3ea6-46d0-858d-a833df648065",
+        "raw_material_id": "39cb4672-992a-48da-b1ec-184b264acca8",
+        "quantity": 200,
+        "entry_type": "out",
+        "movement_date": "2025-09-01T03:06:21.201+00:00",
+        "notes": "OT-2025-09-006 - cxzcz",
+        "user_id": null,
+        "created_at": "2025-09-01T03:06:22.294137+00:00",
+        "unit_price": 0
+      },
+      {
+        "id": "2b80949e-1de7-4c56-84bf-0481fb3b5c6a",
+        "raw_material_id": "c88d7765-cf12-480a-bd2b-1d3f686ee668",
+        "quantity": 40,
+        "entry_type": "out",
+        "movement_date": "2025-09-01T03:06:21.592+00:00",
+        "notes": "OT-2025-09-006 - gbf dsfsdf s sfd",
+        "user_id": null,
+        "created_at": "2025-09-01T03:06:22.68482+00:00",
+        "unit_price": 0
+      },
+      {
+        "id": "bc13e3e0-8d86-4423-b3e2-423c5c621a75",
+        "raw_material_id": "39cb4672-992a-48da-b1ec-184b264acca8",
+        "quantity": 200,
+        "entry_type": "out",
+        "movement_date": "2025-09-01T03:07:40.474+00:00",
+        "notes": "OT-2025-09-007 - cxzcz",
+        "user_id": null,
+        "created_at": "2025-09-01T03:07:41.571161+00:00",
+        "unit_price": 0
+      },
+      {
+        "id": "bb3e6b38-c0b0-4351-b92c-531f1ed8dfc7",
+        "raw_material_id": "c88d7765-cf12-480a-bd2b-1d3f686ee668",
+        "quantity": 40,
+        "entry_type": "out",
+        "movement_date": "2025-09-01T03:07:40.846+00:00",
+        "notes": "OT-2025-09-007 - gbf dsfsdf s sfd",
+        "user_id": null,
+        "created_at": "2025-09-01T03:07:41.936523+00:00",
+        "unit_price": 0
+      },
+      {
+        "id": "facd4d9e-79f5-425d-a77f-c096d37a1567",
+        "raw_material_id": "39cb4672-992a-48da-b1ec-184b264acca8",
+        "quantity": 200,
+        "entry_type": "out",
+        "movement_date": "2025-09-01T03:12:06.301+00:00",
+        "notes": "OT-2025-09-008 - cxzcz",
+        "user_id": null,
+        "created_at": "2025-09-01T03:12:07.395476+00:00",
+        "unit_price": 0
+      },
+      {
+        "id": "bbf0612e-5f28-48c9-b68b-3ccd251ff7e4",
+        "raw_material_id": "c88d7765-cf12-480a-bd2b-1d3f686ee668",
+        "quantity": 40,
+        "entry_type": "out",
+        "movement_date": "2025-09-01T03:12:06.663+00:00",
+        "notes": "OT-2025-09-008 - gbf dsfsdf s sfd",
+        "user_id": null,
+        "created_at": "2025-09-01T03:12:07.756963+00:00",
+        "unit_price": 0
+      },
+      {
+        "id": "1e5bc8ae-269b-4bad-bfc7-32c3f8a9ca2c",
+        "raw_material_id": "39cb4672-992a-48da-b1ec-184b264acca8",
+        "quantity": 200,
+        "entry_type": "out",
+        "movement_date": "2025-09-01T03:17:30.431+00:00",
+        "notes": "OT-2025-09-001 - cxzcz",
+        "user_id": null,
+        "created_at": "2025-09-01T03:17:31.524687+00:00",
+        "unit_price": 0
+      },
+      {
+        "id": "a87f9e04-6fc8-4b2b-8c9a-0b5435a2b626",
+        "raw_material_id": "c88d7765-cf12-480a-bd2b-1d3f686ee668",
+        "quantity": 40,
+        "entry_type": "out",
+        "movement_date": "2025-09-01T03:17:30.821+00:00",
+        "notes": "OT-2025-09-001 - gbf dsfsdf s sfd",
+        "user_id": null,
+        "created_at": "2025-09-01T03:17:31.91991+00:00",
+        "unit_price": 0
+      },
+      {
+        "id": "0fe177e4-94b8-4bca-90f0-6640c0be1a9a",
+        "raw_material_id": "39cb4672-992a-48da-b1ec-184b264acca8",
+        "quantity": 2,
+        "entry_type": "out",
+        "movement_date": "2025-09-01T03:20:11.395+00:00",
+        "notes": "OT-2025-09-003 - cxzcz",
+        "user_id": null,
+        "created_at": "2025-09-01T03:20:12.500092+00:00",
+        "unit_price": 0
+      },
+      {
+        "id": "95d6ee77-c438-43ea-ade8-ae74ee14ef4c",
+        "raw_material_id": "c88d7765-cf12-480a-bd2b-1d3f686ee668",
+        "quantity": 0.4,
+        "entry_type": "out",
+        "movement_date": "2025-09-01T03:20:11.804+00:00",
+        "notes": "OT-2025-09-003 - gbf dsfsdf s sfd",
+        "user_id": null,
+        "created_at": "2025-09-01T03:20:12.91172+00:00",
+        "unit_price": 0
+      },
+      {
+        "id": "56d6102c-7c98-4a08-810a-3d6bd1236561",
+        "raw_material_id": "39cb4672-992a-48da-b1ec-184b264acca8",
+        "quantity": 2,
+        "entry_type": "out",
+        "movement_date": "2025-09-01T03:21:34.836+00:00",
+        "notes": "OT-2025-09-003 - cxzcz",
+        "user_id": null,
+        "created_at": "2025-09-01T03:21:35.931936+00:00",
+        "unit_price": 0
+      },
+      {
+        "id": "5fa8d270-19d2-40bb-977c-40056d0ee568",
+        "raw_material_id": "c88d7765-cf12-480a-bd2b-1d3f686ee668",
+        "quantity": 0.4,
+        "entry_type": "out",
+        "movement_date": "2025-09-01T03:21:35.199+00:00",
+        "notes": "OT-2025-09-003 - gbf dsfsdf s sfd",
+        "user_id": null,
+        "created_at": "2025-09-01T03:21:36.298423+00:00",
+        "unit_price": 0
+      },
+      {
+        "id": "a78369f3-ecd0-483f-9054-0ca697c495d6",
+        "raw_material_id": "39cb4672-992a-48da-b1ec-184b264acca8",
+        "quantity": 200,
+        "entry_type": "out",
+        "movement_date": "2025-09-01T03:30:49.83+00:00",
+        "notes": "OT-2025-09-004 - cxzcz",
+        "user_id": null,
+        "created_at": "2025-09-01T03:30:50.92924+00:00",
+        "unit_price": 0
+      },
+      {
+        "id": "656d372c-dce9-49ee-881b-2baf24dffecd",
+        "raw_material_id": "c88d7765-cf12-480a-bd2b-1d3f686ee668",
+        "quantity": 40,
+        "entry_type": "out",
+        "movement_date": "2025-09-01T03:30:50.212+00:00",
+        "notes": "OT-2025-09-004 - gbf dsfsdf s sfd",
+        "user_id": null,
+        "created_at": "2025-09-01T03:30:51.310087+00:00",
+        "unit_price": 0
+      },
+      {
+        "id": "0fd77e05-d5da-4ab9-858e-333fc8a83287",
+        "raw_material_id": "39cb4672-992a-48da-b1ec-184b264acca8",
+        "quantity": 200,
+        "entry_type": "out",
+        "movement_date": "2025-09-01T03:32:23.097+00:00",
+        "notes": "OT-2025-09-005 - cxzcz",
+        "user_id": null,
+        "created_at": "2025-09-01T03:32:24.202861+00:00",
+        "unit_price": 0
+      },
+      {
+        "id": "1335ed94-885b-4a7a-9632-65efb0719d30",
+        "raw_material_id": "c88d7765-cf12-480a-bd2b-1d3f686ee668",
+        "quantity": 40,
+        "entry_type": "out",
+        "movement_date": "2025-09-01T03:32:23.498+00:00",
+        "notes": "OT-2025-09-005 - gbf dsfsdf s sfd",
+        "user_id": null,
+        "created_at": "2025-09-01T03:32:24.603683+00:00",
+        "unit_price": 0
+      },
+      {
+        "id": "96411c53-e412-4e9e-896d-5ac86b4ae81f",
+        "raw_material_id": "39cb4672-992a-48da-b1ec-184b264acca8",
+        "quantity": 200,
+        "entry_type": "out",
+        "movement_date": "2025-09-01T03:35:56.267+00:00",
+        "notes": "OT-2025-09-006 - cxzcz",
+        "user_id": null,
+        "created_at": "2025-09-01T03:35:57.384283+00:00",
+        "unit_price": 0
+      },
+      {
+        "id": "e7d92434-8526-4ed2-a866-a66fa84ac582",
+        "raw_material_id": "c88d7765-cf12-480a-bd2b-1d3f686ee668",
+        "quantity": 40,
+        "entry_type": "out",
+        "movement_date": "2025-09-01T03:35:56.713+00:00",
+        "notes": "OT-2025-09-006 - gbf dsfsdf s sfd",
+        "user_id": null,
+        "created_at": "2025-09-01T03:35:57.824286+00:00",
+        "unit_price": 0
+      },
+      {
+        "id": "bbb5832a-3cf9-4eb0-97ed-d6e53d041141",
+        "raw_material_id": "39cb4672-992a-48da-b1ec-184b264acca8",
+        "quantity": 100,
+        "entry_type": "out",
+        "movement_date": "2025-09-04T12:17:38.233+00:00",
+        "notes": "OT-2025-09-007 - cxzcz",
+        "user_id": null,
+        "created_at": "2025-09-04T12:17:38.855135+00:00",
+        "unit_price": 0
+      },
+      {
+        "id": "9780771a-cb94-47e2-b033-5dcde9ac4809",
+        "raw_material_id": "c88d7765-cf12-480a-bd2b-1d3f686ee668",
+        "quantity": 20,
+        "entry_type": "out",
+        "movement_date": "2025-09-04T12:17:38.69+00:00",
+        "notes": "OT-2025-09-007 - gbf dsfsdf s sfd",
+        "user_id": null,
+        "created_at": "2025-09-04T12:17:39.316878+00:00",
+        "unit_price": 0
+      },
+      {
+        "id": "4ff96171-7af8-4e7e-8a5c-c00340743e45",
+        "raw_material_id": "c88d7765-cf12-480a-bd2b-1d3f686ee668",
+        "quantity": 1000,
+        "entry_type": "in",
+        "movement_date": "2025-09-04T12:19:00+00:00",
+        "notes": null,
+        "user_id": null,
+        "created_at": "2025-09-04T12:19:58.292405+00:00",
+        "unit_price": 0
+      },
+      {
+        "id": "b3f82982-f4d5-4e77-b9f0-59199c7f27cf",
+        "raw_material_id": "6484b13e-e10f-4eaa-aa9f-2db118bf0dc1",
+        "quantity": 300,
+        "entry_type": "in",
+        "movement_date": "2025-09-04T17:23:00+00:00",
+        "notes": null,
+        "user_id": null,
+        "created_at": "2025-09-04T17:23:22.068526+00:00",
+        "unit_price": 0
+      },
+      {
+        "id": "adbe40d2-7303-44b4-bc60-a494338bea11",
+        "raw_material_id": "c88d7765-cf12-480a-bd2b-1d3f686ee668",
+        "quantity": 1000,
+        "entry_type": "in",
+        "movement_date": "2025-09-04T17:23:00+00:00",
+        "notes": null,
+        "user_id": null,
+        "created_at": "2025-09-04T17:23:49.471282+00:00",
+        "unit_price": 0
+      },
+      {
+        "id": "99398654-6307-4638-8a69-0375902874c3",
+        "raw_material_id": "c88d7765-cf12-480a-bd2b-1d3f686ee668",
+        "quantity": 10.8,
+        "entry_type": "in",
+        "movement_date": "2025-09-04T17:25:00+00:00",
+        "notes": null,
+        "user_id": null,
+        "created_at": "2025-09-04T17:27:08.280254+00:00",
+        "unit_price": 0
+      },
+      {
+        "id": "f95a07cb-e5b3-4228-9d9b-5ce9ef6b6551",
+        "raw_material_id": "c88d7765-cf12-480a-bd2b-1d3f686ee668",
+        "quantity": 0,
+        "entry_type": "in",
+        "movement_date": "2025-09-04T17:27:00+00:00",
+        "notes": null,
+        "user_id": null,
+        "created_at": "2025-09-04T17:27:27.588083+00:00",
+        "unit_price": 0
+      },
+      {
+        "id": "f97737f9-ad32-4113-a2b3-5ccbb3e72be2",
+        "raw_material_id": "39cb4672-992a-48da-b1ec-184b264acca8",
+        "quantity": 200,
+        "entry_type": "out",
+        "movement_date": "2025-09-04T20:50:34.299+00:00",
+        "notes": "OT-2025-09-009 - cxzcz",
+        "user_id": null,
+        "created_at": "2025-09-04T20:50:35.065703+00:00",
+        "unit_price": 0
+      },
+      {
+        "id": "1d522166-64e6-43de-820c-fc238f158a21",
+        "raw_material_id": "c88d7765-cf12-480a-bd2b-1d3f686ee668",
+        "quantity": 40,
+        "entry_type": "out",
+        "movement_date": "2025-09-04T20:50:34.756+00:00",
+        "notes": "OT-2025-09-009 - gbf dsfsdf s sfd",
+        "user_id": null,
+        "created_at": "2025-09-04T20:50:35.51781+00:00",
+        "unit_price": 0
+      }
+    ],
+    "product_analyses": [
+      {
+        "id": "8f56dcd6-1718-4ff0-8f12-fa5701e94e2c",
+        "work_order_id": "210f1cac-8f94-418e-a795-fcc9152eb1c6",
+        "work_order_item_id": null,
+        "analysis_number": "A14716",
+        "analysis_type": "general",
+        "file_path": "/uploads/analyses/Hoja_Trabajo_OT_OT-2025-09-009 (1).pdf",
+        "file_name": "Hoja_Trabajo_OT_OT-2025-09-009 (1).pdf",
+        "analysis_date": "2025-09-04",
+        "notes": null,
+        "created_by": "Usuario",
+        "created_at": "2025-09-04T23:55:15.565795+00:00",
+        "updated_at": "2025-09-04T23:55:15.565795+00:00",
+        "description": null
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "filename": "001_create_raw_materials_tables.sql",
+      "content": "-- Crear tabla de materias primas\r\nCREATE TABLE IF NOT EXISTS raw_materials (\r\n  id UUID DEFAULT gen_random_uuid() PRIMARY KEY,\r\n  code VARCHAR(50) UNIQUE NOT NULL,\r\n  name VARCHAR(255) NOT NULL,\r\n  description TEXT,\r\n  unit VARCHAR(50) NOT NULL DEFAULT 'unidad',\r\n  current_stock DECIMAL(10,3) NOT NULL DEFAULT 0,\r\n  min_stock DECIMAL(10,3) DEFAULT 0,\r\n  max_stock DECIMAL(10,3) DEFAULT NULL,\r\n  location VARCHAR(255),\r\n  supplier VARCHAR(255),\r\n  is_active BOOLEAN NOT NULL DEFAULT TRUE,\r\n  created_at TIMESTAMPTZ DEFAULT NOW(),\r\n  updated_at TIMESTAMPTZ DEFAULT NOW()\r\n);\r\n\r\n-- Crear tabla de entradas de inventario\r\nCREATE TABLE IF NOT EXISTS inventory_entries (\r\n  id UUID DEFAULT gen_random_uuid() PRIMARY KEY,\r\n  raw_material_id UUID NOT NULL REFERENCES raw_materials(id) ON DELETE CASCADE,\r\n  quantity DECIMAL(10,3) NOT NULL,\r\n  entry_type VARCHAR(10) NOT NULL CHECK (entry_type IN ('in', 'out')),\r\n  movement_date TIMESTAMPTZ DEFAULT NOW(),\r\n  notes TEXT,\r\n  user_id VARCHAR(255), -- Para futuras implementaciones con autenticación\r\n  created_at TIMESTAMPTZ DEFAULT NOW()\r\n);\r\n\r\n-- Índices para mejor rendimiento (si no existen)\r\nCREATE INDEX IF NOT EXISTS idx_raw_materials_code ON raw_materials(code);\r\nCREATE INDEX IF NOT EXISTS idx_raw_materials_active ON raw_materials(is_active);\r\nCREATE INDEX IF NOT EXISTS idx_inventory_entries_raw_material_id ON inventory_entries(raw_material_id);\r\nCREATE INDEX IF NOT EXISTS idx_inventory_entries_created_at ON inventory_entries(created_at DESC);\r\n\r\n-- Crear trigger para actualizar updated_at en raw_materials\r\nCREATE OR REPLACE FUNCTION update_updated_at_column()\r\nRETURNS TRIGGER AS $$\r\nBEGIN\r\n  NEW.updated_at = NOW();\r\n  RETURN NEW;\r\nEND;\r\n$$ language 'plpgsql';\r\n\r\nCREATE TRIGGER update_raw_materials_updated_at BEFORE UPDATE ON raw_materials FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();\r\n\r\n-- Función para calcular stock actual\r\nCREATE OR REPLACE FUNCTION calculate_raw_material_stock(material_uuid UUID)\r\nRETURNS DECIMAL(10,3) AS $$\r\nBEGIN\r\n  RETURN COALESCE(\r\n    (SELECT SUM(\r\n      CASE\r\n        WHEN entry_type = 'in' THEN quantity\r\n        WHEN entry_type = 'out' THEN -quantity\r\n      END\r\n    ) FROM inventory_entries WHERE raw_material_id = material_uuid), 0\r\n  );\r\nEND;\r\n$$ LANGUAGE plpgsql;\r\n\r\n-- Función para actualizar stock automáticamente\r\nCREATE OR REPLACE FUNCTION update_raw_material_stock()\r\nRETURNS TRIGGER AS $$\r\nDECLARE\r\n  material_id UUID;\r\n  old_stock DECIMAL(10,3);\r\n  new_stock DECIMAL(10,3);\r\nBEGIN\r\n  material_id := COALESCE(NEW.raw_material_id, OLD.raw_material_id);\r\n\r\n  -- Obtener stock anterior\r\n  SELECT current_stock INTO old_stock FROM raw_materials WHERE id = material_id;\r\n\r\n  -- Calcular nuevo stock\r\n  new_stock := calculate_raw_material_stock(material_id);\r\n\r\n  UPDATE raw_materials SET\r\n    current_stock = new_stock,\r\n    updated_at = NOW()\r\n  WHERE id = material_id;\r\n\r\n  RAISE NOTICE 'Trigger update_raw_material_stock: ID=% OLD_STOCK=% NEW_STOCK=%', material_id, old_stock, new_stock;\r\n\r\n  RETURN COALESCE(NEW, OLD);\r\nEND;\r\n$$ LANGUAGE plpgsql;\r\n\r\n-- Trigger para actualizar stock\r\nDROP TRIGGER IF EXISTS update_stock_after_inventory_entry ON inventory_entries;\r\nCREATE TRIGGER update_stock_after_inventory_entry\r\n  AFTER INSERT OR UPDATE OR DELETE ON inventory_entries\r\n  FOR EACH ROW EXECUTE FUNCTION update_raw_material_stock();\r\n\r\n-- Políticas RLS para raw_materials (si no existe)\r\nALTER TABLE raw_materials ENABLE ROW LEVEL SECURITY;\r\nDO $$ BEGIN\r\n    CREATE POLICY \"Permitir todo acceso en raw_materials\" ON raw_materials FOR ALL TO PUBLIC USING (true) WITH CHECK (true);\r\nEXCEPTION\r\n    WHEN duplicate_object THEN\r\n        RAISE NOTICE 'Policy \"Permitir todo acceso en raw_materials\" ya existe, saltando...';\r\nEND $$;\r\n\r\n-- Políticas RLS para inventory_entries (si no existe)\r\nALTER TABLE inventory_entries ENABLE ROW LEVEL SECURITY;\r\nDO $$ BEGIN\r\n    CREATE POLICY \"Permitir todo acceso en inventory_entries\" ON inventory_entries FOR ALL TO PUBLIC USING (true) WITH CHECK (true);\r\nEXCEPTION\r\n    WHEN duplicate_object THEN\r\n        RAISE NOTICE 'Policy \"Permitir todo acceso en inventory_entries\" ya existe, saltando...';\r\nEND $$;"
+    },
+    {
+      "filename": "002_fix_stock_calculation.sql",
+      "content": "-- Script para recalcular todos los stocks de materias primas\r\n-- Ejecutar este script si los stocks no están actualizados correctamente\r\n\r\n-- Actualizar todos los stocks basándose en las entradas de inventario\r\nUPDATE raw_materials \r\nSET current_stock = calculate_raw_material_stock(id),\r\n    updated_at = NOW()\r\nWHERE id IN (SELECT DISTINCT raw_material_id FROM inventory_entries);\r\n\r\n-- Verificar que los stocks se calcularon correctamente\r\nSELECT \r\n    rm.code,\r\n    rm.name,\r\n    rm.current_stock as stock_bd,\r\n    calculate_raw_material_stock(rm.id) as stock_calculado,\r\n    (SELECT COUNT(*) FROM inventory_entries WHERE raw_material_id = rm.id) as total_entradas\r\nFROM raw_materials rm\r\nWHERE rm.is_active = true\r\nORDER BY rm.code;"
+    },
+    {
+      "filename": "003_create_products_tables.sql",
+      "content": "-- Crear tablas para productos y fórmulas\r\n-- Migración 003: Sistema de productos con fórmulas\r\n\r\n-- Crear tabla de productos\r\nCREATE TABLE IF NOT EXISTS products (\r\n  id UUID DEFAULT gen_random_uuid() PRIMARY KEY,\r\n  name VARCHAR(255) NOT NULL UNIQUE,\r\n  description TEXT,\r\n  unit VARCHAR(50) NOT NULL DEFAULT 'unidad',\r\n  base_quantity DECIMAL(10,3) NOT NULL DEFAULT 1,\r\n  is_active BOOLEAN NOT NULL DEFAULT TRUE,\r\n  created_at TIMESTAMPTZ DEFAULT NOW(),\r\n  updated_at TIMESTAMPTZ DEFAULT NOW()\r\n);\r\n\r\n-- Crear tabla de fórmulas (relación muchos a muchos entre productos y materias primas)\r\nCREATE TABLE IF NOT EXISTS product_formulas (\r\n  id UUID DEFAULT gen_random_uuid() PRIMARY KEY,\r\n  product_id UUID NOT NULL REFERENCES products(id) ON DELETE CASCADE,\r\n  raw_material_id UUID NOT NULL REFERENCES raw_materials(id) ON DELETE CASCADE,\r\n  quantity DECIMAL(10,3) NOT NULL CHECK (quantity > 0),\r\n  created_at TIMESTAMPTZ DEFAULT NOW(),\r\n  UNIQUE(product_id, raw_material_id) -- Prevenir duplicados\r\n);\r\n\r\n-- Índices para mejor rendimiento\r\nCREATE INDEX IF NOT EXISTS idx_products_name ON products(name);\r\nCREATE INDEX IF NOT EXISTS idx_products_active ON products(is_active);\r\nCREATE INDEX IF NOT EXISTS idx_products_created_at ON products(created_at DESC);\r\nCREATE INDEX IF NOT EXISTS idx_product_formulas_product_id ON product_formulas(product_id);\r\nCREATE INDEX IF NOT EXISTS idx_product_formulas_raw_material_id ON product_formulas(raw_material_id);\r\n\r\n-- Crear trigger para actualizar updated_at en products\r\nCREATE OR REPLACE FUNCTION update_products_updated_at_column()\r\nRETURNS TRIGGER AS $$\r\nBEGIN\r\n  NEW.updated_at = NOW();\r\n  RETURN NEW;\r\nEND;\r\n$$ language 'plpgsql';\r\n\r\nCREATE TRIGGER update_products_updated_at \r\n  BEFORE UPDATE ON products \r\n  FOR EACH ROW EXECUTE FUNCTION update_products_updated_at_column();\r\n\r\n-- Políticas RLS para products\r\nALTER TABLE products ENABLE ROW LEVEL SECURITY;\r\nCREATE POLICY \"Permitir todo acceso en products\" ON products \r\n  FOR ALL TO PUBLIC USING (true) WITH CHECK (true);\r\n\r\n-- Políticas RLS para product_formulas\r\nALTER TABLE product_formulas ENABLE ROW LEVEL SECURITY;\r\nCREATE POLICY \"Permitir todo acceso en product_formulas\" ON product_formulas \r\n  FOR ALL TO PUBLIC USING (true) WITH CHECK (true);\r\n\r\n-- Función para obtener productos con sus fórmulas (útil para consultas optimizadas)\r\nCREATE OR REPLACE FUNCTION get_product_with_formula(product_uuid UUID)\r\nRETURNS TABLE (\r\n  product_id UUID,\r\n  product_name VARCHAR(255),\r\n  product_description TEXT,\r\n  product_unit VARCHAR(50),\r\n  product_base_quantity DECIMAL(10,3),\r\n  product_is_active BOOLEAN,\r\n  product_created_at TIMESTAMPTZ,\r\n  product_updated_at TIMESTAMPTZ,\r\n  formula_id UUID,\r\n  raw_material_id UUID,\r\n  raw_material_name VARCHAR(255),\r\n  raw_material_unit VARCHAR(50),\r\n  raw_material_current_stock DECIMAL(10,3),\r\n  formula_quantity DECIMAL(10,3)\r\n) AS $$\r\nBEGIN\r\n  RETURN QUERY\r\n  SELECT \r\n    p.id as product_id,\r\n    p.name as product_name,\r\n    p.description as product_description,\r\n    p.unit as product_unit,\r\n    p.base_quantity as product_base_quantity,\r\n    p.is_active as product_is_active,\r\n    p.created_at as product_created_at,\r\n    p.updated_at as product_updated_at,\r\n    pf.id as formula_id,\r\n    rm.id as raw_material_id,\r\n    rm.name as raw_material_name,\r\n    rm.unit as raw_material_unit,\r\n    rm.current_stock as raw_material_current_stock,\r\n    pf.quantity as formula_quantity\r\n  FROM products p\r\n  LEFT JOIN product_formulas pf ON p.id = pf.product_id\r\n  LEFT JOIN raw_materials rm ON pf.raw_material_id = rm.id\r\n  WHERE p.id = product_uuid\r\n  ORDER BY rm.name;\r\nEND;\r\n$$ LANGUAGE plpgsql;\r\n\r\n-- Función para calcular cuántas unidades de un producto se pueden producir\r\nCREATE OR REPLACE FUNCTION calculate_producible_quantity(product_uuid UUID)\r\nRETURNS DECIMAL(10,3) AS $$\r\nDECLARE\r\n  min_possible DECIMAL(10,3) := NULL;\r\n  formula_record RECORD;\r\n  possible_from_material DECIMAL(10,3);\r\nBEGIN\r\n  -- Iterar sobre cada materia prima en la fórmula\r\n  FOR formula_record IN \r\n    SELECT pf.quantity, rm.current_stock\r\n    FROM product_formulas pf\r\n    JOIN raw_materials rm ON pf.raw_material_id = rm.id\r\n    WHERE pf.product_id = product_uuid AND rm.is_active = true\r\n  LOOP\r\n    -- Calcular cuántas unidades se pueden hacer con esta materia prima\r\n    IF formula_record.quantity > 0 THEN\r\n      possible_from_material := FLOOR(formula_record.current_stock / formula_record.quantity);\r\n      \r\n      -- Mantener el mínimo (factor limitante)\r\n      IF min_possible IS NULL OR possible_from_material < min_possible THEN\r\n        min_possible := possible_from_material;\r\n      END IF;\r\n    END IF;\r\n  END LOOP;\r\n  \r\n  -- Si no hay fórmula o no se puede producir nada, retornar 0\r\n  RETURN COALESCE(min_possible, 0);\r\nEND;\r\n$$ LANGUAGE plpgsql;\r\n\r\n-- Insertar datos de ejemplo para testing (opcional - comentar en producción)\r\n/*\r\nINSERT INTO products (name, description, unit, base_quantity) VALUES \r\n('Agrocup', 'Fertilizante líquido premium para cultivos', 'litro', 1000),\r\n('Nutrimix', 'Mezcla nutritiva para plantas ornamentales', 'kg', 50),\r\n('Calciomax', 'Suplemento de calcio para suelos ácidos', 'kg', 25);\r\n\r\n-- Ejemplo de fórmulas (requiere que existan las materias primas)\r\n-- INSERT INTO product_formulas (product_id, raw_material_id, quantity) VALUES \r\n-- ((SELECT id FROM products WHERE name = 'Agrocup'), (SELECT id FROM raw_materials WHERE code = 'CALC'), 200),\r\n-- ((SELECT id FROM products WHERE name = 'Agrocup'), (SELECT id FROM raw_materials WHERE code = 'COBR'), 150),\r\n-- ((SELECT id FROM products WHERE name = 'Agrocup'), (SELECT id FROM raw_materials WHERE code = 'AGUA'), 20);\r\n*/"
+    },
+    {
+      "filename": "004_create_work_orders_tables.sql",
+      "content": "-- Crear tablas para órdenes de trabajo (OT)\r\n-- Migración 004: Sistema de órdenes de trabajo\r\n\r\n-- Crear tabla de órdenes de trabajo\r\nCREATE TABLE IF NOT EXISTS work_orders (\r\n  id UUID DEFAULT gen_random_uuid() PRIMARY KEY,\r\n  order_number VARCHAR(50) NOT NULL UNIQUE,\r\n  description TEXT,\r\n  status VARCHAR(20) NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'in_progress', 'completed', 'cancelled')),\r\n  priority VARCHAR(10) NOT NULL DEFAULT 'normal' CHECK (priority IN ('low', 'normal', 'high', 'urgent')),\r\n  planned_start_date DATE,\r\n  planned_end_date DATE,\r\n  actual_start_datetime TIMESTAMPTZ,\r\n  actual_end_datetime TIMESTAMPTZ,\r\n  -- Keep old fields for backward compatibility\r\n  actual_start_date DATE,\r\n  actual_end_date DATE,\r\n  notes TEXT,\r\n  created_by VARCHAR(255),\r\n  created_at TIMESTAMPTZ DEFAULT NOW(),\r\n  updated_at TIMESTAMPTZ DEFAULT NOW()\r\n);\r\n\r\n-- Crear tabla de items de órdenes de trabajo (productos a producir)\r\nCREATE TABLE IF NOT EXISTS work_order_items (\r\n  id UUID DEFAULT gen_random_uuid() PRIMARY KEY,\r\n  work_order_id UUID NOT NULL REFERENCES work_orders(id) ON DELETE CASCADE,\r\n  product_id UUID NOT NULL REFERENCES products(id) ON DELETE CASCADE,\r\n  planned_quantity DECIMAL(10,3) NOT NULL CHECK (planned_quantity > 0),\r\n  produced_quantity DECIMAL(10,3) NOT NULL DEFAULT 0 CHECK (produced_quantity >= 0),\r\n  unit VARCHAR(50) NOT NULL,\r\n  status VARCHAR(20) NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'in_progress', 'completed', 'cancelled')),\r\n  notes TEXT,\r\n  created_at TIMESTAMPTZ DEFAULT NOW(),\r\n  updated_at TIMESTAMPTZ DEFAULT NOW(),\r\n  UNIQUE(work_order_id, product_id) -- Prevenir duplicados de productos en la misma OT\r\n);\r\n\r\n-- Crear tabla para el consumo de materias primas en OT (para seguimiento)\r\nCREATE TABLE IF NOT EXISTS work_order_consumption (\r\n  id UUID DEFAULT gen_random_uuid() PRIMARY KEY,\r\n  work_order_item_id UUID NOT NULL REFERENCES work_order_items(id) ON DELETE CASCADE,\r\n  raw_material_id UUID NOT NULL REFERENCES raw_materials(id) ON DELETE CASCADE,\r\n  planned_consumption DECIMAL(10,3) NOT NULL CHECK (planned_consumption >= 0),\r\n  actual_consumption DECIMAL(10,3) NOT NULL DEFAULT 0 CHECK (actual_consumption >= 0),\r\n  unit VARCHAR(50) NOT NULL,\r\n  created_at TIMESTAMPTZ DEFAULT NOW(),\r\n  updated_at TIMESTAMPTZ DEFAULT NOW(),\r\n  UNIQUE(work_order_item_id, raw_material_id) -- Prevenir duplicados\r\n);\r\n\r\n-- Índices para mejor rendimiento\r\nCREATE INDEX IF NOT EXISTS idx_work_orders_status ON work_orders(status);\r\nCREATE INDEX IF NOT EXISTS idx_work_orders_priority ON work_orders(priority);\r\nCREATE INDEX IF NOT EXISTS idx_work_orders_created_at ON work_orders(created_at DESC);\r\nCREATE INDEX IF NOT EXISTS idx_work_orders_planned_start ON work_orders(planned_start_date);\r\nCREATE INDEX IF NOT EXISTS idx_work_order_items_work_order_id ON work_order_items(work_order_id);\r\nCREATE INDEX IF NOT EXISTS idx_work_order_items_product_id ON work_order_items(product_id);\r\nCREATE INDEX IF NOT EXISTS idx_work_order_items_status ON work_order_items(status);\r\nCREATE INDEX IF NOT EXISTS idx_work_order_consumption_item_id ON work_order_consumption(work_order_item_id);\r\nCREATE INDEX IF NOT EXISTS idx_work_order_consumption_raw_material_id ON work_order_consumption(raw_material_id);\r\n\r\n-- Crear trigger para actualizar updated_at en work_orders\r\nCREATE OR REPLACE FUNCTION update_work_orders_updated_at_column()\r\nRETURNS TRIGGER AS $$\r\nBEGIN\r\n  NEW.updated_at = NOW();\r\n  RETURN NEW;\r\nEND;\r\n$$ language 'plpgsql';\r\n\r\nCREATE TRIGGER update_work_orders_updated_at\r\n  BEFORE UPDATE ON work_orders\r\n  FOR EACH ROW EXECUTE FUNCTION update_work_orders_updated_at_column();\r\n\r\n-- Crear trigger para actualizar updated_at en work_order_items\r\nCREATE OR REPLACE FUNCTION update_work_order_items_updated_at_column()\r\nRETURNS TRIGGER AS $$\r\nBEGIN\r\n  NEW.updated_at = NOW();\r\n  RETURN NEW;\r\nEND;\r\n$$ language 'plpgsql';\r\n\r\nCREATE TRIGGER update_work_order_items_updated_at\r\n  BEFORE UPDATE ON work_order_items\r\n  FOR EACH ROW EXECUTE FUNCTION update_work_order_items_updated_at_column();\r\n\r\n-- Políticas RLS para work_orders\r\nALTER TABLE work_orders ENABLE ROW LEVEL SECURITY;\r\nCREATE POLICY \"Permitir todo acceso en work_orders\" ON work_orders\r\n  FOR ALL TO PUBLIC USING (true) WITH CHECK (true);\r\n\r\n-- Políticas RLS para work_order_items\r\nALTER TABLE work_order_items ENABLE ROW LEVEL SECURITY;\r\nCREATE POLICY \"Permitir todo acceso en work_order_items\" ON work_order_items\r\n  FOR ALL TO PUBLIC USING (true) WITH CHECK (true);\r\n\r\n-- Políticas RLS para work_order_consumption\r\nALTER TABLE work_order_consumption ENABLE ROW LEVEL SECURITY;\r\nCREATE POLICY \"Permitir todo acceso en work_order_consumption\" ON work_order_consumption\r\n  FOR ALL TO PUBLIC USING (true) WITH CHECK (true);\r\n\r\n-- Función para generar número de orden automáticamente\r\nCREATE OR REPLACE FUNCTION generate_work_order_number()\r\nRETURNS VARCHAR(50) AS $$\r\nDECLARE\r\n  current_year INTEGER;\r\n  current_month INTEGER;\r\n  sequence_number INTEGER;\r\n  result_order_number VARCHAR(50);\r\n  year_month_pattern VARCHAR(20);\r\nBEGIN\r\n  -- Usar la fecha actual para determinar el año-mes\r\n  current_year := EXTRACT(YEAR FROM NOW());\r\n  current_month := EXTRACT(MONTH FROM NOW());\r\n  year_month_pattern := 'OT-' || current_year || '-' || LPAD(current_month::TEXT, 2, '0') || '-%';\r\n\r\n  -- Obtener el último número de secuencia para el año-mes actual\r\n  -- Manejar tanto el formato antiguo (OT-YYYY-XXXX) como el nuevo (OT-YYYY-MM-XXX)\r\n  SELECT COALESCE(MAX(\r\n    CASE\r\n      WHEN work_orders.order_number LIKE 'OT-' || current_year || '-' || LPAD(current_month::TEXT, 2, '0') || '-%' THEN\r\n        CAST(SUBSTRING(work_orders.order_number FROM '[0-9]{3}$') AS INTEGER)\r\n      WHEN work_orders.order_number LIKE 'OT-' || current_year || '-%' AND work_orders.order_number NOT LIKE 'OT-' || current_year || '-' || LPAD(current_month::TEXT, 2, '0') || '-%' THEN\r\n        -- Para formato antiguo, extraer los últimos 4 dígitos\r\n        CAST(SUBSTRING(work_orders.order_number FROM '[0-9]{4}$') AS INTEGER)\r\n      ELSE 0\r\n    END\r\n  ), 0) + 1\r\n  INTO sequence_number\r\n  FROM work_orders\r\n  WHERE work_orders.order_number LIKE 'OT-' || current_year || '-%';\r\n\r\n  -- Generar el número de orden con formato OT-YYYY-MM-001\r\n  result_order_number := 'OT-' || current_year || '-' || LPAD(current_month::TEXT, 2, '0') || '-' || LPAD(sequence_number::TEXT, 3, '0');\r\n\r\n  RETURN result_order_number;\r\nEND;\r\n$$ LANGUAGE plpgsql;\r\n\r\n-- Función para verificar disponibilidad de materias primas para una OT\r\nCREATE OR REPLACE FUNCTION check_raw_materials_availability(work_order_uuid UUID)\r\nRETURNS TABLE (\r\n  raw_material_id UUID,\r\n  raw_material_name VARCHAR(255),\r\n  required_quantity DECIMAL(10,3),\r\n  available_quantity DECIMAL(10,3),\r\n  shortage_quantity DECIMAL(10,3),\r\n  is_available BOOLEAN\r\n) AS $$\r\nBEGIN\r\n  RETURN QUERY\r\n  SELECT\r\n    rm.id as raw_material_id,\r\n    rm.name as raw_material_name,\r\n    -- Calculate required quantity using rule of three instead of using stored consumption\r\n    SUM(\r\n      CASE\r\n        WHEN p.base_quantity > 0 THEN (pf.quantity * woi.planned_quantity / p.base_quantity)\r\n        ELSE pf.quantity\r\n      END\r\n    ) as required_quantity,\r\n    rm.current_stock as available_quantity,\r\n    GREATEST(0, SUM(\r\n      CASE\r\n        WHEN p.base_quantity > 0 THEN (pf.quantity * woi.planned_quantity / p.base_quantity)\r\n        ELSE pf.quantity\r\n      END\r\n    ) - rm.current_stock) as shortage_quantity,\r\n    (rm.current_stock >= SUM(\r\n      CASE\r\n        WHEN p.base_quantity > 0 THEN (pf.quantity * woi.planned_quantity / p.base_quantity)\r\n        ELSE pf.quantity\r\n      END\r\n    )) as is_available\r\n  FROM work_order_items woi\r\n  JOIN products p ON woi.product_id = p.id\r\n  JOIN product_formulas pf ON p.id = pf.product_id\r\n  JOIN raw_materials rm ON pf.raw_material_id = rm.id\r\n  WHERE woi.work_order_id = work_order_uuid\r\n  GROUP BY rm.id, rm.name, rm.current_stock\r\n  ORDER BY rm.name;\r\nEND;\r\n$$ LANGUAGE plpgsql;\r\n\r\n-- Función para obtener OT completa con productos y fórmulas\r\nCREATE OR REPLACE FUNCTION get_work_order_details(work_order_uuid UUID)\r\nRETURNS TABLE (\r\n  work_order_id UUID,\r\n  order_number VARCHAR(50),\r\n  work_order_description TEXT,\r\n  work_order_status VARCHAR(20),\r\n  work_order_priority VARCHAR(10),\r\n  planned_start_date DATE,\r\n  planned_end_date DATE,\r\n  actual_start_datetime TIMESTAMPTZ,\r\n  actual_end_datetime TIMESTAMPTZ,\r\n  -- Keep old fields for backward compatibility\r\n  actual_start_date DATE,\r\n  actual_end_date DATE,\r\n  work_order_created_at TIMESTAMPTZ,\r\n  item_id UUID,\r\n  product_id UUID,\r\n  product_name VARCHAR(255),\r\n  product_unit VARCHAR(50),\r\n  product_base_quantity DECIMAL(10,3),\r\n  planned_quantity DECIMAL(10,3),\r\n  produced_quantity DECIMAL(10,3),\r\n  item_status VARCHAR(20),\r\n  formula_raw_material_id UUID,\r\n  raw_material_name VARCHAR(255),\r\n  raw_material_unit VARCHAR(50),\r\n  raw_material_current_stock DECIMAL(10,3),\r\n  formula_quantity DECIMAL(10,3),\r\n  consumption_planned DECIMAL(10,3),\r\n  consumption_actual DECIMAL(10,3)\r\n) AS $$\r\nBEGIN\r\n  RETURN QUERY\r\n  SELECT\r\n    wo.id as work_order_id,\r\n    wo.order_number,\r\n    wo.description as work_order_description,\r\n    wo.status as work_order_status,\r\n    wo.priority as work_order_priority,\r\n    wo.planned_start_date,\r\n    wo.planned_end_date,\r\n    wo.actual_start_datetime,\r\n    wo.actual_end_datetime,\r\n    -- Keep old fields for backward compatibility\r\n    wo.actual_start_date,\r\n    wo.actual_end_date,\r\n    wo.created_at as work_order_created_at,\r\n    woi.id as item_id,\r\n    p.id as product_id,\r\n    p.name as product_name,\r\n    p.unit as product_unit,\r\n    p.base_quantity as product_base_quantity,\r\n    woi.planned_quantity,\r\n    woi.produced_quantity,\r\n    woi.status as item_status,\r\n    rm.id as formula_raw_material_id,\r\n    rm.name as raw_material_name,\r\n    rm.unit as raw_material_unit,\r\n    rm.current_stock as raw_material_current_stock,\r\n    -- Calculate adjusted formula quantity using rule of three: (base_formula_quantity * planned_quantity) / base_quantity\r\n    CASE\r\n      WHEN p.base_quantity > 0 AND p.base_quantity IS NOT NULL THEN ROUND((pf.quantity * woi.planned_quantity / p.base_quantity)::numeric, 3)\r\n      ELSE pf.quantity\r\n    END as formula_quantity,\r\n    -- Calculate required quantity using rule of three: (formula_quantity * planned_quantity) / base_quantity\r\n    CASE\r\n      WHEN p.base_quantity > 0 AND p.base_quantity IS NOT NULL THEN ROUND((pf.quantity * woi.planned_quantity / p.base_quantity)::numeric, 3)\r\n      ELSE pf.quantity\r\n    END as consumption_planned,\r\n    woc.actual_consumption\r\n  FROM work_orders wo\r\n  LEFT JOIN work_order_items woi ON wo.id = woi.work_order_id\r\n  LEFT JOIN products p ON woi.product_id = p.id\r\n  LEFT JOIN product_formulas pf ON p.id = pf.product_id\r\n  LEFT JOIN raw_materials rm ON pf.raw_material_id = rm.id\r\n  LEFT JOIN work_order_consumption woc ON woi.id = woc.work_order_item_id AND rm.id = woc.raw_material_id\r\n  WHERE wo.id = work_order_uuid\r\n  ORDER BY p.name, rm.name;\r\nEND;\r\n$$ LANGUAGE plpgsql;\r\n\r\n-- Función para calcular consumo planificado basado en fórmula del producto\r\nCREATE OR REPLACE FUNCTION calculate_planned_consumption(\r\n  p_product_id UUID,\r\n  p_quantity DECIMAL(10,3)\r\n)\r\nRETURNS TABLE (\r\n  raw_material_id UUID,\r\n  consumption_quantity DECIMAL(10,3),\r\n  unit VARCHAR(50)\r\n) AS $$\r\nBEGIN\r\n  RETURN QUERY\r\n  SELECT\r\n    pf.raw_material_id,\r\n    (pf.quantity * p_quantity / p.base_quantity) as consumption_quantity,\r\n    rm.unit\r\n  FROM product_formulas pf\r\n  JOIN products p ON pf.product_id = p.id\r\n  JOIN raw_materials rm ON pf.raw_material_id = rm.id\r\n  WHERE pf.product_id = p_product_id;\r\nEND;\r\n$$ LANGUAGE plpgsql;\r\n\r\n-- Función para generar número de orden basado en fecha planificada\r\nCREATE OR REPLACE FUNCTION generate_work_order_number_for_date(\r\n  p_planned_start_date DATE\r\n)\r\nRETURNS VARCHAR(50) AS $$\r\nDECLARE\r\n  target_year INTEGER;\r\n  target_month INTEGER;\r\n  sequence_number INTEGER;\r\n  result_order_number VARCHAR(50);\r\nBEGIN\r\n  -- Usar la fecha planificada para determinar el año-mes\r\n  target_year := EXTRACT(YEAR FROM p_planned_start_date);\r\n  target_month := EXTRACT(MONTH FROM p_planned_start_date);\r\n\r\n  -- Obtener el último número de secuencia para el año-mes de la fecha planificada\r\n  -- Manejar tanto el formato antiguo (OT-YYYY-XXXX) como el nuevo (OT-YYYY-MM-XXX)\r\n  SELECT COALESCE(MAX(\r\n    CASE\r\n      WHEN work_orders.order_number LIKE 'OT-' || target_year || '-' || LPAD(target_month::TEXT, 2, '0') || '-%' THEN\r\n        CAST(SUBSTRING(work_orders.order_number FROM '[0-9]{3}$') AS INTEGER)\r\n      WHEN work_orders.order_number LIKE 'OT-' || target_year || '-%' AND work_orders.order_number NOT LIKE 'OT-' || target_year || '-' || LPAD(target_month::TEXT, 2, '0') || '-%' THEN\r\n        -- Para formato antiguo, extraer los últimos 4 dígitos\r\n        CAST(SUBSTRING(work_orders.order_number FROM '[0-9]{4}$') AS INTEGER)\r\n      ELSE 0\r\n    END\r\n  ), 0) + 1\r\n  INTO sequence_number\r\n  FROM work_orders\r\n  WHERE work_orders.order_number LIKE 'OT-' || target_year || '-%';\r\n\r\n  -- Generar el número de orden con formato OT-YYYY-MM-001\r\n  result_order_number := 'OT-' || target_year || '-' || LPAD(target_month::TEXT, 2, '0') || '-' || LPAD(sequence_number::TEXT, 3, '0');\r\n\r\n  RETURN result_order_number;\r\nEND;\r\n$$ LANGUAGE plpgsql;\r\n"
+    },
+    {
+      "filename": "005_add_unit_price_to_inventory_entries.sql",
+      "content": "-- Agregar columna unit_price a inventory_entries\r\nALTER TABLE inventory_entries\r\nADD COLUMN IF NOT EXISTS unit_price DECIMAL(10,2) DEFAULT 0;\r\n\r\n-- Agregar índice para mejor rendimiento en consultas por precio\r\nCREATE INDEX IF NOT EXISTS idx_inventory_entries_unit_price ON inventory_entries(unit_price);\r\n\r\n-- Agregar comentario a la columna para documentación\r\nCOMMENT ON COLUMN inventory_entries.unit_price IS 'Precio unitario de la materia prima en la entrada/salida de inventario (opcional)';"
+    },
+    {
+      "filename": "006_create_product_analyses_tables.sql",
+      "content": "-- Crear tabla para análisis de productos terminados\r\n-- Migración 006: Sistema de análisis de productos\r\n\r\n-- Crear tabla de análisis de productos\r\nCREATE TABLE IF NOT EXISTS product_analyses (\r\n  id UUID DEFAULT gen_random_uuid() PRIMARY KEY,\r\n  work_order_id UUID NOT NULL REFERENCES work_orders(id) ON DELETE CASCADE,\r\n  work_order_item_id UUID,\r\n  analysis_number VARCHAR(6) NOT NULL UNIQUE,\r\n  analysis_type VARCHAR(50) NOT NULL DEFAULT 'general',\r\n  file_path VARCHAR(500),\r\n  file_name VARCHAR(255),\r\n  analysis_date DATE NOT NULL DEFAULT CURRENT_DATE,\r\n  notes TEXT,\r\n  created_by VARCHAR(255),\r\n  created_at TIMESTAMPTZ DEFAULT NOW(),\r\n  updated_at TIMESTAMPTZ DEFAULT NOW()\r\n);\r\n\r\n-- Índices para mejor rendimiento\r\nCREATE INDEX IF NOT EXISTS idx_product_analyses_work_order_id ON product_analyses(work_order_id);\r\nCREATE INDEX IF NOT EXISTS idx_product_analyses_work_order_item_id ON product_analyses(work_order_item_id);\r\nCREATE INDEX IF NOT EXISTS idx_product_analyses_analysis_number ON product_analyses(analysis_number);\r\nCREATE INDEX IF NOT EXISTS idx_product_analyses_analysis_date ON product_analyses(analysis_date DESC);\r\nCREATE INDEX IF NOT EXISTS idx_product_analyses_analysis_type ON product_analyses(analysis_type);\r\n\r\n-- Eliminar trigger si existe antes de crearlo\r\nDROP TRIGGER IF EXISTS update_product_analyses_updated_at ON product_analyses;\r\nDROP TRIGGER IF EXISTS update_product_analyses_updated_at_column ON product_analyses;\r\n\r\n-- Crear trigger para actualizar updated_at en product_analyses\r\nCREATE OR REPLACE FUNCTION update_product_analyses_updated_at_column()\r\nRETURNS TRIGGER AS $$\r\nBEGIN\r\n  NEW.updated_at = NOW();\r\n  RETURN NEW;\r\nEND;\r\n$$ language 'plpgsql';\r\n\r\nCREATE TRIGGER update_product_analyses_updated_at\r\n  BEFORE UPDATE ON product_analyses\r\n  FOR EACH ROW EXECUTE FUNCTION update_product_analyses_updated_at_column();\r\n\r\n-- Políticas RLS para product_analyses\r\nALTER TABLE product_analyses ENABLE ROW LEVEL SECURITY;\r\n\r\n-- Eliminar política si existe antes de crearla\r\nDROP POLICY IF EXISTS \"Permitir todo acceso en product_analyses\" ON product_analyses;\r\n\r\nCREATE POLICY \"Permitir todo acceso en product_analyses\" ON product_analyses\r\n  FOR ALL TO PUBLIC USING (true) WITH CHECK (true);\r\n\r\n-- Función para generar número de análisis único de 6 dígitos\r\nCREATE OR REPLACE FUNCTION generate_analysis_number()\r\nRETURNS VARCHAR(6) AS $$\r\nDECLARE\r\n  result_number VARCHAR(6);\r\n  attempts INTEGER := 0;\r\n  max_attempts INTEGER := 100;\r\nBEGIN\r\n  -- Intentar generar un número único hasta max_attempts veces\r\n  WHILE attempts < max_attempts LOOP\r\n    -- Generar número aleatorio de 6 dígitos (100000-999999)\r\n    result_number := LPAD((100000 + floor(random() * 900000))::TEXT, 6, '0');\r\n\r\n    -- Verificar si ya existe\r\n    IF NOT EXISTS (SELECT 1 FROM product_analyses WHERE analysis_number = result_number) THEN\r\n      RETURN result_number;\r\n    END IF;\r\n\r\n    attempts := attempts + 1;\r\n  END LOOP;\r\n\r\n  -- Si no se pudo generar un número único después de max_attempts, usar timestamp\r\n  result_number := LPAD(EXTRACT(EPOCH FROM NOW())::INTEGER % 1000000, 6, '0');\r\n  RETURN result_number;\r\nEND;\r\n$$ LANGUAGE plpgsql;\r\n\r\n-- Función para obtener análisis de una orden de trabajo\r\nCREATE OR REPLACE FUNCTION get_work_order_analyses(work_order_uuid UUID)\r\nRETURNS TABLE (\r\n  analysis_id UUID,\r\n  analysis_number VARCHAR(6),\r\n  analysis_type VARCHAR(50),\r\n  file_name VARCHAR(255),\r\n  analysis_date DATE,\r\n  notes TEXT,\r\n  created_at TIMESTAMPTZ,\r\n  work_order_item_id UUID,\r\n  product_name VARCHAR(255),\r\n  product_unit VARCHAR(50)\r\n) AS $$\r\nBEGIN\r\n  RETURN QUERY\r\n  SELECT\r\n    pa.id as analysis_id,\r\n    pa.analysis_number,\r\n    pa.analysis_type,\r\n    pa.file_name,\r\n    pa.analysis_date,\r\n    pa.notes,\r\n    pa.created_at,\r\n    pa.work_order_item_id,\r\n    p.name as product_name,\r\n    p.unit as product_unit\r\n  FROM product_analyses pa\r\n  JOIN work_order_items woi ON pa.work_order_item_id = woi.id\r\n  JOIN products p ON woi.product_id = p.id\r\n  WHERE pa.work_order_id = work_order_uuid\r\n  ORDER BY pa.created_at DESC;\r\nEND;\r\n$$ LANGUAGE plpgsql;\r\n"
+    },
+    {
+      "filename": "007_fix_product_analyses_structure.sql",
+      "content": "-- Migración 007: Corregir estructura de análisis de productos\r\n-- Los análisis deben ser de la formulación completa, no de productos individuales\r\n\r\n-- Agregar columna para descripción del análisis (opcional)\r\nALTER TABLE product_analyses ADD COLUMN IF NOT EXISTS description TEXT;\r\n\r\n-- Quitar la restricción de work_order_item_id ya que los análisis son de la OT completa\r\nALTER TABLE product_analyses DROP CONSTRAINT IF EXISTS product_analyses_work_order_item_id_fkey;\r\nALTER TABLE product_analyses DROP COLUMN IF EXISTS work_order_item_id;\r\n\r\n-- Actualizar índices (quitar el índice de work_order_item_id)\r\nDROP INDEX IF EXISTS idx_product_analyses_work_order_item_id;\r\n\r\n-- Eliminar la función existente antes de recrearla con nueva signatura\r\nDROP FUNCTION IF EXISTS get_work_order_analyses(UUID);\r\n\r\n-- Función actualizada para obtener análisis de una orden de trabajo\r\n-- Ahora sin JOIN con productos específicos\r\nCREATE FUNCTION get_work_order_analyses(work_order_uuid UUID)\r\nRETURNS TABLE (\r\n  analysis_id UUID,\r\n  analysis_number VARCHAR(6),\r\n  analysis_type VARCHAR(50),\r\n  file_name VARCHAR(255),\r\n  analysis_date DATE,\r\n  notes TEXT,\r\n  description TEXT,\r\n  created_at TIMESTAMPTZ,\r\n  created_by VARCHAR(255)\r\n) AS $$\r\nBEGIN\r\n  RETURN QUERY\r\n  SELECT\r\n    pa.id as analysis_id,\r\n    pa.analysis_number,\r\n    pa.analysis_type,\r\n    pa.file_name,\r\n    pa.analysis_date,\r\n    pa.notes,\r\n    pa.description,\r\n    pa.created_at,\r\n    pa.created_by\r\n  FROM product_analyses pa\r\n  WHERE pa.work_order_id = work_order_uuid\r\n  ORDER BY pa.created_at DESC;\r\nEND;\r\n$$ LANGUAGE plpgsql;\r\n\r\n-- Actualizar comentarios en la tabla\r\nCOMMENT ON TABLE product_analyses IS 'Tabla de análisis de productos terminados - análisis de la formulación completa de una orden de trabajo';\r\nCOMMENT ON COLUMN product_analyses.work_order_id IS 'ID de la orden de trabajo (análisis de toda la formulación)';\r\nCOMMENT ON COLUMN product_analyses.description IS 'Descripción opcional del análisis';\r\n"
+    },
+    {
+      "filename": "008_add_description_to_product_analyses.sql",
+      "content": "-- Migración 008: Agregar columna description a product_analyses\r\n-- Soluciona problema de error 400 - columna no encontrada en schema cache\r\n\r\nALTER TABLE product_analyses\r\nADD COLUMN IF NOT EXISTS description TEXT;\r\n\r\n-- Agregar comentario a la columna\r\nCOMMENT ON COLUMN product_analyses.description IS 'Descripción detallada del análisis de producto';\r\n\r\n-- Crear índice para búsqueda en la descripción\r\nCREATE INDEX IF NOT EXISTS idx_product_analyses_description ON product_analyses USING gin(to_tsvector('spanish', description));\r\n\r\nCOMMIT;"
+    }
+  ]
+}

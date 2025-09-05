@@ -27,11 +27,11 @@ CREATE TABLE IF NOT EXISTS inventory_entries (
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
--- Índices para mejor rendimiento
-CREATE INDEX idx_raw_materials_code ON raw_materials(code);
-CREATE INDEX idx_raw_materials_active ON raw_materials(is_active);
-CREATE INDEX idx_inventory_entries_raw_material_id ON inventory_entries(raw_material_id);
-CREATE INDEX idx_inventory_entries_created_at ON inventory_entries(created_at DESC);
+-- Índices para mejor rendimiento (si no existen)
+CREATE INDEX IF NOT EXISTS idx_raw_materials_code ON raw_materials(code);
+CREATE INDEX IF NOT EXISTS idx_raw_materials_active ON raw_materials(is_active);
+CREATE INDEX IF NOT EXISTS idx_inventory_entries_raw_material_id ON inventory_entries(raw_material_id);
+CREATE INDEX IF NOT EXISTS idx_inventory_entries_created_at ON inventory_entries(created_at DESC);
 
 -- Crear trigger para actualizar updated_at en raw_materials
 CREATE OR REPLACE FUNCTION update_updated_at_column()
@@ -62,24 +62,50 @@ $$ LANGUAGE plpgsql;
 -- Función para actualizar stock automáticamente
 CREATE OR REPLACE FUNCTION update_raw_material_stock()
 RETURNS TRIGGER AS $$
+DECLARE
+  material_id UUID;
+  old_stock DECIMAL(10,3);
+  new_stock DECIMAL(10,3);
 BEGIN
+  material_id := COALESCE(NEW.raw_material_id, OLD.raw_material_id);
+
+  -- Obtener stock anterior
+  SELECT current_stock INTO old_stock FROM raw_materials WHERE id = material_id;
+
+  -- Calcular nuevo stock
+  new_stock := calculate_raw_material_stock(material_id);
+
   UPDATE raw_materials SET
-    current_stock = calculate_raw_material_stock(COALESCE(NEW.raw_material_id, OLD.raw_material_id)),
+    current_stock = new_stock,
     updated_at = NOW()
-  WHERE id = COALESCE(NEW.raw_material_id, OLD.raw_material_id);
+  WHERE id = material_id;
+
+  RAISE NOTICE 'Trigger update_raw_material_stock: ID=% OLD_STOCK=% NEW_STOCK=%', material_id, old_stock, new_stock;
 
   RETURN COALESCE(NEW, OLD);
 END;
 $$ LANGUAGE plpgsql;
 
+-- Trigger para actualizar stock
+DROP TRIGGER IF EXISTS update_stock_after_inventory_entry ON inventory_entries;
 CREATE TRIGGER update_stock_after_inventory_entry
   AFTER INSERT OR UPDATE OR DELETE ON inventory_entries
   FOR EACH ROW EXECUTE FUNCTION update_raw_material_stock();
 
--- Políticas RLS para raw_materials
+-- Políticas RLS para raw_materials (si no existe)
 ALTER TABLE raw_materials ENABLE ROW LEVEL SECURITY;
-CREATE POLICY "Permitir todo acceso en raw_materials" ON raw_materials FOR ALL TO PUBLIC USING (true) WITH CHECK (true);
+DO $$ BEGIN
+    CREATE POLICY "Permitir todo acceso en raw_materials" ON raw_materials FOR ALL TO PUBLIC USING (true) WITH CHECK (true);
+EXCEPTION
+    WHEN duplicate_object THEN
+        RAISE NOTICE 'Policy "Permitir todo acceso en raw_materials" ya existe, saltando...';
+END $$;
 
--- Políticas RLS para inventory_entries
+-- Políticas RLS para inventory_entries (si no existe)
 ALTER TABLE inventory_entries ENABLE ROW LEVEL SECURITY;
-CREATE POLICY "Permitir todo acceso en inventory_entries" ON inventory_entries FOR ALL TO PUBLIC USING (true) WITH CHECK (true);
+DO $$ BEGIN
+    CREATE POLICY "Permitir todo acceso en inventory_entries" ON inventory_entries FOR ALL TO PUBLIC USING (true) WITH CHECK (true);
+EXCEPTION
+    WHEN duplicate_object THEN
+        RAISE NOTICE 'Policy "Permitir todo acceso en inventory_entries" ya existe, saltando...';
+END $$;

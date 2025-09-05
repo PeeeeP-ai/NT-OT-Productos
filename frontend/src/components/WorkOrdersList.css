@@ -77,6 +77,22 @@
   transition: background-color 0.2s;
 }
 
+.print-button {
+  background: #1976d2;
+  color: white;
+  border: none;
+  padding: 10px 16px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: 500;
+  transition: background-color 0.2s;
+}
+
+.print-button:hover {
+  background: #1565c0;
+}
+
 .create-button:hover {
   background: #45a049;
 }

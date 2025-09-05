@@ -27,7 +27,7 @@
 
 .header-left {
   display: flex;
-  flex-direction: column;
+  align-items: center;
   gap: 1rem;
 }
 
@@ -36,16 +36,24 @@
   align-items: center;
 }
 
-.logo-section {
+.app-logo {
   display: flex;
   align-items: center;
-  gap: 1rem;
 }
 
-.app-logo {
-  font-size: 2rem;
-  color: #fff;
-  animation: bounce 2s infinite;
+.logo-image {
+  height: 50px;
+  width: auto;
+  max-width: 150px;
+  border-radius: 8px;
+  object-fit: contain;
+}
+
+.header-title-nav {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.5rem;
 }
 
 .app-header h1 {
@@ -177,6 +185,21 @@
   }
 
   .header-left {
+    flex-direction: column;
+    align-items: center;
+    gap: 0.75rem;
+    text-align: center;
+  }
+
+  .app-logo {
+    justify-content: center;
+  }
+
+  .logo-text {
+    font-size: 1.3rem;
+  }
+
+  .header-title-nav {
     align-items: center;
   }
 

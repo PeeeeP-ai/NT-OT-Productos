@@ -319,6 +319,7 @@ const InventoryEntryForm: React.FC<EntryFormProps> = ({
   const [formData, setFormData] = useState<InventoryEntryFormData>({
     quantity: 0,
     entry_type: 'in',
+    unit_price: 0,
     movement_date: new Date().toISOString().slice(0, 16),
     notes: ''
   });
@@ -440,6 +441,22 @@ const InventoryEntryForm: React.FC<EntryFormProps> = ({
               />
               <span className="unit-display">{material.unit}</span>
               {errors.quantity && <span className="field-error">{errors.quantity}</span>}
+            </div>
+
+            <div className="form-group">
+              <label>Precio Unitario</label>
+              <input
+                type="number"
+                value={formData.unit_price}
+                onChange={(e) => setFormData(prev => ({
+                  ...prev,
+                  unit_price: parseFloat(e.target.value) || 0
+                }))}
+                placeholder="0.00"
+                min="0"
+                step="0.01"
+              />
+              <span className="unit-display">$/{material.unit}</span>
             </div>
 
             <div className="form-group">

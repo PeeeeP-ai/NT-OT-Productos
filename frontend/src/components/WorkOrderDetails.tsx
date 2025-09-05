@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { WorkOrder, WorkOrderDetails as WorkOrderDetailsType } from '../types';
 import { getWorkOrderDetails, updateWorkOrderStatus, completeWorkOrder, getStatusColor, getPriorityColor } from '../services/workOrdersService';
+import jsPDF from 'jspdf';
 import './WorkOrderDetails.css';
 
 interface WorkOrderDetailsProps {
@@ -8,13 +9,15 @@ interface WorkOrderDetailsProps {
   isOpen: boolean;
   onClose: () => void;
   onUpdate?: () => void;
+  onViewAnalyses?: (workOrder: WorkOrder) => void;
 }
 
 const WorkOrderDetails: React.FC<WorkOrderDetailsProps> = ({
   workOrder,
   isOpen,
   onClose,
-  onUpdate
+  onUpdate,
+  onViewAnalyses
 }) => {
   const [details, setDetails] = useState<WorkOrderDetailsType | null>(null);
   const [loading, setLoading] = useState(false);
@@ -229,6 +232,157 @@ const WorkOrderDetails: React.FC<WorkOrderDetailsProps> = ({
     }
   };
 
+  const generateWorkSheetPDF = () => {
+    if (!details) return;
+
+    const pdf = new jsPDF();
+    const pageWidth = pdf.internal.pageSize.getWidth();
+    const pageHeight = pdf.internal.pageSize.getHeight();
+    const margin = 20;
+    let yPos = 50; // Adjusted for logo space
+
+    // Helper to add line if needed
+    const checkPageBreak = () => {
+      if (yPos > pageHeight - 30) {
+        pdf.addPage();
+        yPos = 30;
+      }
+    };
+
+    // Logo - intentar agregar la imagen al PDF directamente
+    try {
+      // Intentar agregar la imagen directamente desde URL (jsPDF moderno soporta esto)
+      pdf.addImage('/img/logont.png', 'PNG', 20, 20, 40, 20);
+      console.log('Logo agregado exitosamente al PDF');
+    } catch (error) {
+      console.log('Error al cargar logo desde URL, usando placeholder:', error);
+      // Fallback al logo de texto
+      pdf.setFillColor(63, 81, 181);
+      pdf.rect(20, 20, 40, 20, 'F');
+      pdf.setFont('helvetica', 'bold');
+      pdf.setFontSize(12);
+      pdf.setTextColor(255, 255, 255);
+      pdf.text('LOGO NT', 40, 32, { align: 'center' });
+      console.log('Logo placeholder agregado al PDF');
+    }
+    pdf.setTextColor(0, 0, 0);
+
+    // Reset font for title
+    pdf.setFontSize(20);
+    pdf.setFont('helvetica', 'bold');
+    pdf.text('HOJA DE TRABAJO', pageWidth / 2, yPos, { align: 'center' });
+    yPos += 15;
+
+    // Order Number
+    pdf.setFontSize(16);
+    pdf.text(`OT ${details.order_number}`, pageWidth / 2, yPos, { align: 'center' });
+    yPos += 10;
+    pdf.line(20, yPos, pageWidth - 20, yPos);
+    yPos += 15;
+
+    // Order Information
+    pdf.setFontSize(12);
+    pdf.setFont('helvetica', 'normal');
+    pdf.text(`Estado: ${getStatusLabel(details.status)}`, margin, yPos);
+    yPos += 6;
+    pdf.text(`Prioridad: ${getPriorityLabel(details.priority)}`, margin, yPos);
+    yPos += 6;
+    pdf.text(`Fecha Planificada: ${formatDate(details.planned_start_date)} - ${formatDate(details.planned_end_date)}`, margin, yPos);
+    yPos += 6;
+    if (details.actual_start_datetime) {
+      pdf.text(`Fecha Real: ${formatDate(details.actual_start_datetime, true)}`, margin, yPos);
+      yPos += 6;
+    }
+    yPos += 5;
+
+    // Description
+    if (details.description) {
+      pdf.setFont('helvetica', 'bold');
+      pdf.text('Descripción:', margin, yPos);
+      yPos += 6;
+      pdf.setFont('helvetica', 'normal');
+      const splitDescription = pdf.splitTextToSize(details.description, pageWidth - 2 * margin);
+      pdf.text(splitDescription, margin, yPos);
+      yPos += splitDescription.length * 5 + 5;
+    }
+
+    // Products
+    pdf.setFontSize(14);
+    pdf.setFont('helvetica', 'bold');
+    pdf.text('PRODUCTOS A PRODUCIR', margin, yPos);
+    yPos += 10;
+    pdf.line(margin, yPos - 2, pageWidth - margin, yPos - 2);
+    yPos += 5;
+
+    pdf.setFontSize(11);
+    pdf.setFont('helvetica', 'normal');
+
+    if ((details as any).items && (details as any).items.length > 0) {
+      (details as any).items.forEach((item: any) => {
+        checkPageBreak();
+        pdf.text(`Producto: ${item.product_name}`, margin, yPos);
+        yPos += 6;
+        pdf.text(`Cantidad Planificada: ${formatNumber(item.planned_quantity)} ${item.product_unit}`, margin + 10, yPos);
+        yPos += 6;
+        pdf.text(`Cantidad Producida: ${formatNumber(item.produced_quantity || 0)} ${item.product_unit}`, margin + 10, yPos);
+        yPos += 10;
+      });
+    }
+
+    // Raw Materials
+    checkPageBreak();
+    pdf.setFontSize(14);
+    pdf.setFont('helvetica', 'bold');
+    pdf.text('MATERIAS PRIMAS NECESARIAS', margin, yPos);
+    yPos += 10;
+    pdf.line(margin, yPos - 2, pageWidth - margin, yPos - 2);
+    yPos += 5;
+
+    const materialsMap: { [key: string]: { name: string; unit: string; total: number } } = {};
+
+    // Aggregate materials from all products
+    if ((details as any).items && (details as any).items.length > 0) {
+      (details as any).items.forEach((item: any) => {
+        if (item.formula) {
+          item.formula.forEach((material: any) => {
+            const requiredQuantity = material.consumption_planned || material.quantity || 0;
+            const key = material.raw_material_name;
+
+            if (materialsMap[key]) {
+              materialsMap[key].total += requiredQuantity;
+            } else {
+              materialsMap[key] = {
+                name: material.raw_material_name,
+                unit: material.raw_material_unit,
+                total: requiredQuantity
+              };
+            }
+          });
+        }
+      });
+    }
+
+    pdf.setFontSize(11);
+    pdf.setFont('helvetica', 'normal');
+
+    Object.values(materialsMap).forEach((material) => {
+      checkPageBreak();
+      pdf.text(`${material.name}: ${formatNumber(material.total)} ${material.unit}`, margin, yPos);
+      yPos += 8;
+    });
+
+
+    // Footer
+    const footerText = 'Fecha de impresión: ' + new Date().toLocaleDateString('es-ES') + ' ' + new Date().toLocaleTimeString('es-ES');
+    pdf.setFontSize(8);
+    pdf.setFont('helvetica', 'italic');
+    pdf.text(footerText, margin, pageHeight - 15);
+
+    // Save PDF
+    const fileName = `Hoja_Trabajo_OT_${details.order_number}.pdf`;
+    pdf.save(fileName);
+  };
+
   if (!isOpen) return null;
 
   return (
@@ -237,7 +391,20 @@ const WorkOrderDetails: React.FC<WorkOrderDetailsProps> = ({
         <div className="modal-content">
           <div className="modal-header">
             <h2>📋 Detalles de Orden de Trabajo</h2>
-            <button onClick={onClose} className="close-button">×</button>
+            <div className="header-actions">
+              <button onClick={generateWorkSheetPDF} className="print-button">
+                🖨️ Imprimir Hoja de Trabajo
+              </button>
+              {workOrder.status === 'completed' && (
+                <button
+                  onClick={() => onViewAnalyses?.(workOrder)}
+                  className="analyses-button"
+                >
+                  📊 Análisis
+                </button>
+              )}
+              <button onClick={onClose} className="close-button">×</button>
+            </div>
           </div>
           <div className="modal-body">
             {loading ? (

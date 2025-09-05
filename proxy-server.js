@@ -2,11 +2,60 @@ const express = require('express');
 const cors = require('cors');
 const axios = require('axios');
 const dotenv = require('dotenv');
+const multer = require('multer');
 
 dotenv.config({ path: './public_html/api/.env' });
 
 const app = express();
 const PORT = 4000;
+
+// Configurar multer para análisis con almacenamiento en disco
+const upload = multer({
+  storage: multer.diskStorage({
+    destination: function (req, file, cb) {
+      const destPath = './uploads/analyses/';
+      console.log('📁 Multer - Destination path:', destPath);
+      console.log('📁 Multer - File info:', {
+        fieldname: file.fieldname,
+        originalname: file.originalname,
+        mimetype: file.mimetype,
+        size: file.size
+      });
+
+      // Verificar si el directorio existe
+      const fs = require('fs');
+
+      if (!fs.existsSync(destPath)) {
+        console.log('⚠️ Multer - Directory doesn\'t exist, creating:', destPath);
+        try {
+          fs.mkdirSync(destPath, { recursive: true });
+          console.log('✅ Multer - Directory created successfully');
+        } catch (err) {
+          console.error('❌ Multer - Error creating directory:', err);
+          return cb(err);
+        }
+      } else {
+        console.log('✅ Multer - Directory exists');
+      }
+
+      cb(null, destPath);
+    },
+    filename: function (req, file, cb) {
+      const fileName = file.originalname;
+      console.log('📝 Multer - Final filename:', fileName);
+      cb(null, fileName);
+    }
+  }),
+  // Agregar límites para prevenir errores
+  limits: {
+    fileSize: 10 * 1024 * 1024, // 10MB límite
+  },
+  // Agregar error handling
+  fileFilter: function (req, file, cb) {
+    console.log('🔍 Multer - File filter check for:', file.originalname);
+    cb(null, true); // Aceptar todos los archivos por ahora
+  }
+});
 
 console.log('🔧 Iniciando servidor proxy API...');
 console.log('📍 Puerto:', PORT);
@@ -61,6 +110,9 @@ app.use((req, res, next) => {
 
 app.use(express.json());
 
+// 📁 Servir archivos estáticos desde carpeta uploads
+app.use('/uploads', express.static('uploads'));
+
 // 📊 SUPABASE CLIENT
 const supabaseClient = axios.create({
   baseURL: process.env.SUPABASE_REST_URL,
@@ -101,7 +153,13 @@ app.get('/', (req, res) => {
       'POST /products/:id/formula': 'Agregar ingrediente a fórmula',
       'PUT /products/:id/formula/:rawMaterialId': 'Actualizar ingrediente de fórmula',
       'DELETE /products/:id/formula/:rawMaterialId': 'Eliminar ingrediente de fórmula',
-      'GET /products/:id/with-formula': 'Obtener producto completo con fórmula'
+      'GET /products/:id/with-formula': 'Obtener producto completo con fórmula',
+      'GET /work-orders/:id/analyses': 'Obtener análisis de orden de trabajo',
+      'POST /work-orders/:id/analyses': 'Crear análisis para orden de trabajo',
+      'GET /uploads/*': 'Acceder a archivos subidos',
+      'GET /analyses': 'Lista de todos los análisis',
+      'GET /analyses/:id': 'Obtener análisis específico',
+      'DELETE /analyses/:id': 'Eliminar análisis'
     },
     cors_enabled: true,
     all_origins_accepted: true
@@ -1104,6 +1162,376 @@ app.get('/products/:id/with-formula', async (req, res) => {
     res.status(500).json({
       success: false,
       message: 'Error obteniendo producto con fórmula',
+      error: error.message
+    });
+  }
+});
+
+// =========================================
+// RUTAS PARA ANÁLISIS DE PRODUCTOS
+// =========================================
+
+// 📋 GET ANÁLISIS DE UNA ORDEN DE TRABAJO
+app.get('/work-orders/:id/analyses', async (req, res) => {
+  try {
+    console.log('📊 Obteniendo análisis para orden de trabajo:', req.params.id);
+
+    // Consulta directa a la tabla product_analyses
+    const response = await supabaseClient.get(`product_analyses?work_order_id=eq.${req.params.id}&order=created_at.desc`);
+
+    const analyses = response.data || [];
+
+    console.log('📊 Análisis encontrados:', analyses.length);
+
+    res.header('Access-Control-Allow-Origin', '*');
+    res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE, OPTIONS');
+    res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization');
+
+    res.json({
+      success: true,
+      data: analyses,
+      count: analyses.length,
+      timestamp: new Date().toISOString()
+    });
+
+  } catch (error) {
+    console.error('❌ Error obteniendo análisis de orden de trabajo:', error.message);
+
+    res.header('Access-Control-Allow-Origin', '*');
+    res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE, OPTIONS');
+    res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization');
+
+    res.status(500).json({
+      success: false,
+      message: 'Error obteniendo análisis de orden de trabajo',
+      error: error.message
+    });
+  }
+});
+
+// 📦 POST CREAR ANÁLISIS PARA UNA ORDEN DE TRABAJO
+// Middleware de manejo de errores de Multer
+function handleMulterError(err, req, res, next) {
+  if (err instanceof multer.MulterError) {
+    console.error('❌ Error de Multer:', err.code, err.message);
+    return res.status(400).json({
+      success: false,
+      message: 'Error al procesar archivo',
+      error: `${err.code}: ${err.message}`
+    });
+  } else if (err) {
+    console.error('❌ Error general de archivo:', err);
+    return res.status(500).json({
+      success: false,
+      message: 'Error al subir archivo',
+      error: err.message
+    });
+  }
+  next();
+}
+
+app.post('/work-orders/:id/analyses',
+  (req, res, next) => {
+    console.log('🔄 [PRE-MULTER] Iniciando proceso de análisis para OT:', req.params.id);
+    console.log('🔄 [PRE-MULTER] Content-Type:', req.headers['content-type']);
+    console.log('🔄 [PRE-MULTER] Content-Length:', req.headers['content-length']);
+    next();
+  },
+  upload.single('file'),
+  handleMulterError,
+  (req, res, next) => {
+    console.log('🔄 [POST-MULTER] Procesando request después de Multer');
+    console.log('🔄 [POST-MULTER] req.file existe:', !!req.file);
+    if (req.file) {
+      console.log('🔄 [POST-MULTER] Archivo recibido:', req.file.originalname, '- Size:', req.file.size);
+    }
+    next();
+  },
+  async (req, res) => {
+  try {
+    console.log('🔄 [MAIN-PROCESS] Iniciando procesamiento principal de análisis para OT:', req.params.id);
+
+    // Detalles completos del archivo
+    if (req.file) {
+      console.log('📄 Archivo recibido en req.file:', {
+        fieldname: req.file.fieldname,
+        originalname: req.file.originalname,
+        mimetype: req.file.mimetype,
+        destination: req.file.destination,
+        filename: req.file.filename,
+        path: req.file.path,
+        size: req.file.size
+      });
+
+      // Verificar que el archivo existe en disco
+      const fs = require('fs');
+      const fullPath = req.file.path;
+      console.log('📍 Ruta completa del archivo físicamente:', fullPath);
+      console.log('📍 Ruta web para acceso:', `/uploads/analyses/${req.file.originalname}`);
+
+      if (fs.existsSync(fullPath)) {
+        console.log('✅ Archivo escrito exitosamente en:', fullPath);
+        const stats = fs.statSync(fullPath);
+        console.log('📏 Tamaño del archivo:', stats.size, 'bytes');
+        console.log('🕒 Última modificación:', stats.mtime);
+      } else {
+        console.error('❌ ERROR: Archivo físico no encontrado en:', fullPath);
+      }
+    } else {
+      console.log('⚠️ No se recibió archivo');
+    }
+
+    console.log('📊 Datos del formulario req.body:', JSON.stringify(req.body, null, 2));
+
+    // Obtener datos del formulario
+    const analysis_type = req.body.analysis_type;
+    const analysis_date = req.body.analysis_date;
+    const notes = req.body.notes;
+    const description = req.body.description;
+    const created_by = req.body.created_by || req.body.created_by;
+    // Normalizar la ruta del archivo para formato web
+    let file_name = req.file ? req.file.originalname : req.body.file_name;
+    let file_path = null;
+
+    if (req.file) {
+      // Construir ruta web estándar para acceder desde navegador
+      file_path = `/uploads/analyses/${req.file.originalname}`;
+      console.log('📍 Ruta web normalizada:', file_path);
+      console.log('📍 Ruta física real:', req.file.path);
+    }
+
+    console.log('🎯 Dados do analyses a guardar:', {
+      analysis_type,
+      analysis_date,
+      notes,
+      description,
+      created_by,
+      file_name,
+      file_path,
+      has_file: !!req.file
+    });
+
+    console.log('🔄 [VERIFICATION-START] Iniciando verificación de archivo...');
+
+    // Verificar nuevamente si el archivo existe antes de crear el análisis
+    if (req.file && req.file.path) {
+      const fs = require('fs');
+      try {
+        const stats = fs.statSync(req.file.path);
+        console.log('✅ Archivo verificado antes de pensamiento:', {
+          size: stats.size,
+          exists: true,
+          lastModified: stats.mtime
+        });
+
+      } catch (fileError) {
+        console.error('❌ ERROR: Problema al verificar archivo antes del pensamiento:', fileError.message);
+        return res.status(400).json({
+          success: false,
+          message: 'Error al acceder al archivo subido'
+        });
+      }
+    }
+
+    // Generar número de análisis único (máximo 6 caracteres)
+    console.log('🔢 Generando número de análisis...');
+    // Generar número basado en timestamp (últimos 5 dígitos para asegurar unicidad)
+    const timestamp = Date.now();
+    const timestampDigits = timestamp.toString().slice(-5); // 5 dígitos del timestamp
+    const analysisNumber = `A${timestampDigits}`; // 1 letra + 5 dígitos = 6 caracteres
+    console.log('🔢 Número de análisis generado:', analysisNumber);
+
+    // Crear el análisis
+    const analysisData = {
+      work_order_id: req.params.id,
+      analysis_number: analysisNumber,
+      analysis_type: analysis_type || 'general',
+      analysis_date: analysis_date || new Date().toISOString().split('T')[0],
+      notes: notes || null,
+      description: description || null,
+      created_by: created_by || 'Sistema',
+      file_name: file_name || null,
+      file_path: file_path || null
+    };
+
+    console.log('📊 Creando análisis con datos:', JSON.stringify(analysisData, null, 2));
+
+    try {
+      const response = await supabaseClient.post('product_analyses', analysisData);
+
+      console.log('✅ Análisis creado exitosamente');
+      console.log('📊 Respuesta exitosa de Supabase:', JSON.stringify(response.data, null, 2));
+
+      res.header('Access-Control-Allow-Origin', '*');
+      res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE, OPTIONS');
+      res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization');
+
+      res.status(201).json({
+        success: true,
+        data: response.data[0] || response.data,
+        message: 'Análisis creado exitosamente'
+      });
+
+    } catch (supabaseError) {
+      console.error('❌ Error detallado de Supabase:', supabaseError.message);
+      console.error('❌ Status code de Supabase:', supabaseError.response?.status);
+      console.error('❌ Headers de Supabase:', JSON.stringify(supabaseError.response?.headers, null, 2));
+      console.error('❌ Respuesta completa de Supabase:', JSON.stringify(supabaseError.response?.data, null, 2));
+
+      // Intentar extraer el mensaje específico del error
+      let errorMessage = 'Error desconocido de Supabase';
+      if (supabaseError.response?.data) {
+        if (supabaseError.response.data.details) {
+          errorMessage = supabaseError.response.data.details;
+        } else if (supabaseError.response.data.message) {
+          errorMessage = supabaseError.response.data.message;
+        } else if (supabaseError.response.data.error) {
+          errorMessage = supabaseError.response.data.error;
+        }
+      }
+
+      console.error('❌ Mensaje específico del error:', errorMessage);
+
+      res.header('Access-Control-Allow-Origin', '*');
+      res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE, OPTIONS');
+      res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization');
+
+      res.status(500).json({
+        success: false,
+        message: 'Error creando análisis',
+        error: errorMessage,
+        supabase_error: supabaseError.response?.data || 'No additional info'
+      });
+    }
+
+  } catch (error) {
+    console.error('❌ Error creando análisis:', error.message);
+
+    res.header('Access-Control-Allow-Origin', '*');
+    res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE, OPTIONS');
+    res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization');
+
+    res.status(500).json({
+      success: false,
+      message: 'Error creando análisis',
+      error: error.message
+    });
+  }
+});
+
+// 📋 GET TODOS LOS ANÁLISIS
+app.get('/analyses', async (req, res) => {
+  try {
+    console.log('📊 Petición GET /analyses');
+    console.log('  Query params:', req.query);
+
+    let query = 'order=created_at.desc';
+
+    if (req.query.limit) {
+      query += `&limit=${req.query.limit}`;
+    }
+
+    console.log('  Supabase query:', query);
+
+    const response = await supabaseClient.get(`product_analyses?${query}`);
+
+    console.log('  Supabase response:', response.data.length, 'análisis encontrados');
+
+    let analyses = response.data || [];
+
+    res.header('Access-Control-Allow-Origin', '*');
+    res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE, OPTIONS');
+    res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization');
+
+    res.json({
+      success: true,
+      data: Array.isArray(analyses) ? analyses : [],
+      count: Array.isArray(analyses) ? analyses.length : 0,
+      timestamp: new Date().toISOString(),
+      origin: req.headers.origin || 'none',
+      cors_working: true
+    });
+
+    console.log('  ✅ Respuesta enviada correctamente');
+
+  } catch (error) {
+    console.error('❌ Error obteniendo análisis:', error.message);
+
+    res.header('Access-Control-Allow-Origin', '*');
+    res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE, OPTIONS');
+    res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization');
+
+    res.status(500).json({
+      success: false,
+      message: 'Error obteniendo análisis',
+      error: error.message,
+      type: 'database_error',
+      cors_working: true
+    });
+  }
+});
+
+// 📋 GET ANÁLISIS ESPECÍFICO
+app.get('/analyses/:id', async (req, res) => {
+  try {
+    console.log('📊 Obteniendo análisis específico:', req.params.id);
+
+    const response = await supabaseClient.get(`product_analyses?id=eq.${req.params.id}`);
+
+    if (!response.data || response.data.length === 0) {
+      return res.status(404).json({ success: false, message: 'Análisis no encontrado' });
+    }
+
+    res.header('Access-Control-Allow-Origin', '*');
+    res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE, OPTIONS');
+    res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization');
+
+    res.json({
+      success: true,
+      data: response.data[0]
+    });
+
+  } catch (error) {
+    console.error('❌ Error obteniendo análisis:', error.message);
+
+    res.header('Access-Control-Allow-Origin', '*');
+    res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE, OPTIONS');
+    res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization');
+
+    res.status(500).json({
+      success: false,
+      message: 'Error obteniendo análisis',
+      error: error.message
+    });
+  }
+});
+
+// 🗑️ DELETE ANÁLISIS
+app.delete('/analyses/:id', async (req, res) => {
+  try {
+    console.log('🗑️ Eliminando análisis:', req.params.id);
+
+    await supabaseClient.delete(`product_analyses?id=eq.${req.params.id}`);
+
+    res.header('Access-Control-Allow-Origin', '*');
+    res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE, OPTIONS');
+    res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization');
+
+    res.json({
+      success: true,
+      message: 'Análisis eliminado exitosamente'
+    });
+
+  } catch (error) {
+    console.error('❌ Error eliminando análisis:', error.message);
+
+    res.header('Access-Control-Allow-Origin', '*');
+    res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE, OPTIONS');
+    res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization');
+
+    res.status(500).json({
+      success: false,
+      message: 'Error eliminando análisis',
       error: error.message
     });
   }
@@ -2269,9 +2697,16 @@ app.listen(PORT, () => {
   console.log('   ✅ DELETE /work-orders/:id → Eliminar orden de trabajo');
   console.log('   ✅ GET /work-orders/:id/details → Detalles completos');
   console.log();
+  console.log('🎯 ANÁLISIS DE PRODUCTOS ENDPOINTS:');
+  console.log('   ✅ GET /work-orders/:id/analyses → Análisis de OT');
+  console.log('   ✅ POST /work-orders/:id/analyses → Crear análisis');
+  console.log('   ✅ GET /analyses → Lista de todos los análisis');
+  console.log('   ✅ GET /analyses/:id → Análisis específico');
+  console.log('   ✅ DELETE /analyses/:id → Eliminar análisis');
+  console.log();
   console.log('📱 Frontend listo en: http://localhost:5174');
   console.log('🛡️ CORS headers aplicados a todas las respuestas');
-  console.log('🔥 ¡YA PUEDES CREAR ÓRDENES DE TRABAJO!');
+  console.log('🔥 ¡YA PUEDES CREAR ÓRDENES DE TRABAJO Y ANÁLISIS!');
 });
 
 module.exports = app;

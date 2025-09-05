@@ -423,3 +423,249 @@ Loading spinner para botones */
   opacity: 0.7;
   pointer-events: none;
 }
+
+/* View Selector Styles */
+.list-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 20px;
+  padding-bottom: 15px;
+  border-bottom: 2px solid #e0e0e0;
+}
+
+.list-header h2 {
+  margin: 0;
+  color: #333;
+  font-size: 1.8rem;
+}
+
+.header-actions {
+  display: flex;
+  gap: 15px;
+  align-items: center;
+}
+
+.view-selector {
+  display: flex;
+  gap: 8px;
+  background: transparent;
+}
+
+.view-button {
+  padding: 8px;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  font-size: 16px;
+  transition: all 0.2s;
+  border-radius: 4px;
+  color: #666;
+}
+
+.view-button:hover {
+  background: #f5f5f5;
+  color: #333;
+}
+
+.view-button.active {
+  background: #2196f3;
+  color: white;
+}
+
+.view-button.active:hover {
+  background: #1976d2;
+}
+
+/* Table Styles */
+.products-table-container {
+  background: white;
+  border-radius: 12px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+  border: 1px solid #e0e0e0;
+  overflow: hidden;
+}
+
+.products-table-wrapper {
+  max-height: 600px;
+  overflow-y: auto;
+}
+
+.products-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 14px;
+}
+
+.products-table thead {
+  position: sticky;
+  top: 0;
+  background: #f8f9fa;
+  z-index: 1;
+}
+
+.products-table th {
+  padding: 12px 8px;
+  text-align: left;
+  font-weight: 600;
+  color: #333;
+  border-bottom: 2px solid #e0e0e0;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.products-table td {
+  padding: 12px 8px;
+  border-bottom: 1px solid #e0e0e0;
+  vertical-align: middle;
+}
+
+.products-table tbody tr:hover {
+  background: #f8f9fa;
+}
+
+/* Table Cell Styles */
+.name-cell {
+  font-weight: 600;
+  color: #333;
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.description-cell {
+  max-width: 250px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #666;
+}
+
+.unit-cell {
+  font-weight: 500;
+  text-align: center;
+}
+
+.base-quantity-cell {
+  font-weight: 600;
+  text-align: center;
+}
+
+.created-cell {
+  font-size: 13px;
+  color: #666;
+}
+
+.status-cell {
+  text-align: center;
+}
+
+.actions-cell {
+  text-align: center;
+}
+
+/* Table Action Buttons */
+.action-button {
+  padding: 6px 8px;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 500;
+  transition: all 0.2s;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.action-button:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+}
+
+.action-button.table-action {
+  background: transparent !important;
+  color: #666 !important;
+  border: 1px solid #ddd !important;
+}
+
+.action-button.table-action:hover {
+  background: #f5f5f5 !important;
+  color: #333 !important;
+}
+
+.action-button.view-button {
+  border-color: #2196f3 !important;
+  color: #2196f3 !important;
+}
+
+.action-button.view-button:hover {
+  background: #e3f2fd !important;
+  color: #1976d2 !important;
+}
+
+.action-button.formula-button {
+  border-color: #2196f3 !important;
+  color: #2196f3 !important;
+}
+
+.action-button.formula-button:hover {
+  background: #e3f2fd !important;
+  color: #1976d2 !important;
+}
+
+.action-button.edit-button {
+  border-color: #ff9800 !important;
+  color: #ff9800 !important;
+}
+
+.action-button.edit-button:hover {
+  background: #fff3e0 !important;
+  color: #f57c00 !important;
+}
+
+.action-button.warning {
+  border-color: #ff9800 !important;
+  color: #ff9800 !important;
+}
+
+.action-button.warning:hover {
+  background: #fff3e0 !important;
+  color: #f57c00 !important;
+}
+
+.action-button.success {
+  border-color: #4caf50 !important;
+  color: #4caf50 !important;
+}
+
+.action-button.success:hover {
+  background: #e8f5e8 !important;
+  color: #2e7d32 !important;
+}
+
+.action-button.delete-button {
+  border-color: #f44336 !important;
+  color: #f44336 !important;
+}
+
+.action-button.delete-button:hover {
+  background: #ffebee !important;
+  color: #d32f2f !important;
+}
+
+/* Loading spinner for table actions */
+.loading-spinner {
+  width: 16px;
+  height: 16px;
+  border: 2px solid #f3f3f3;
+  border-top: 2px solid #667eea;
+  border-radius: 50%;
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
+}

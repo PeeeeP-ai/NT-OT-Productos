@@ -44,6 +44,60 @@ export const getWorkOrders = async (status?: string): Promise<WorkOrdersApiRespo
   }
 };
 
+// Obtener órdenes de trabajo pendientes y en progreso ordenadas por fecha de inicio
+export const getActiveWorkOrdersSortedByStartDate = async (): Promise<WorkOrdersApiResponse> => {
+  try {
+    // Obtener pendentes
+    const pendingResponse = await getWorkOrders('pending');
+
+    // Obtener en progreso
+    const inProgressResponse = await getWorkOrders('in_progress');
+
+    if (!pendingResponse.success || !inProgressResponse.success) {
+      return {
+        success: false,
+        message: 'Error al obtener órdenes de trabajo',
+        errors: [
+          ...(pendingResponse.errors || []),
+          ...(inProgressResponse.errors || [])
+        ]
+      };
+    }
+
+    // Combinar resultados
+    const allActiveWorkOrders = [
+      ...(pendingResponse.data || []),
+      ...(inProgressResponse.data || [])
+    ];
+
+    // Ordenar por fecha de inicio (planned_start_date primero, luego actual_start_datetime)
+    const sortedWorkOrders = allActiveWorkOrders.sort((a, b) => {
+      const dateA = a.planned_start_date || a.actual_start_datetime || a.created_at;
+      const dateB = b.planned_start_date || b.actual_start_datetime || b.created_at;
+
+      // Si alguno no tiene fecha, lo pone al final
+      if (!dateA && !dateB) return 0;
+      if (!dateA) return 1;
+      if (!dateB) return -1;
+
+      return new Date(dateA).getTime() - new Date(dateB).getTime();
+    });
+
+    return {
+      success: true,
+      message: 'Órdenes de trabajo obtenidas exitosamente',
+      data: sortedWorkOrders
+    };
+  } catch (error) {
+    console.error('Error obteniendo órdenes de trabajo activas:', error);
+    return {
+      success: false,
+      message: 'Error al obtener órdenes de trabajo activas',
+      errors: [error instanceof Error ? error.message : 'Error desconocido']
+    };
+  }
+};
+
 // Obtener orden de trabajo por ID
 export const getWorkOrder = async (id: string): Promise<WorkOrderApiResponse> => {
   try {

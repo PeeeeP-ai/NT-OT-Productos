@@ -142,139 +142,150 @@ const ProductForm: React.FC<ProductFormProps> = ({
 
   return (
     <div className="modal-overlay">
-      <div className="modal-content">
+      <div className="modal-content product-form-modal">
         <div className="modal-header">
           <h2>{isEdit ? 'Editar Fórmula' : 'Nueva Fórmula'}</h2>
           <button
             type="button"
             onClick={handleClose}
-            className="close-button"
+            className="modal-close-btn"
             aria-label="Cerrar"
             disabled={loading}
+            title="Cerrar"
           >
             ×
           </button>
         </div>
 
-        <form onSubmit={handleSubmit} className="product-form">
-          {errors.general && (
-            <div className="error-message general-error">
-              {errors.general}
-            </div>
-          )}
-
-          <div className="form-row">
-            <div className="form-group">
-              <label htmlFor="name">Nombre de la Fórmula *</label>
-              <input
-                type="text"
-                id="name"
-                value={formData.name}
-                onChange={(e) => handleInputChange('name', e.target.value)}
-                className={errors.name ? 'error' : ''}
-                placeholder="Ej: Agrocup, Fertilizante Premium..."
-                maxLength={255}
-                disabled={loading}
-              />
-              {errors.name && <span className="field-error">{errors.name}</span>}
-            </div>
-          </div>
-
-          <div className="form-row">
-            <div className="form-group">
-              <label htmlFor="description">Descripción</label>
-              <textarea
-                id="description"
-                value={formData.description}
-                onChange={(e) => handleInputChange('description', e.target.value)}
-                className={errors.description ? 'error' : ''}
-                placeholder="Descripción opcional del producto..."
-                rows={3}
-                maxLength={1000}
-                disabled={loading}
-              />
-              <div className="char-count">
-                {formData.description?.length || 0}/1000 caracteres
+        <div className="form-body">
+          <form onSubmit={handleSubmit} className="product-form">
+            {errors.general && (
+              <div className="error-message general-error">
+                {errors.general}
               </div>
-              {errors.description && <span className="field-error">{errors.description}</span>}
-            </div>
-          </div>
+            )}
 
-          <div className="form-row">
-            <div className="form-group">
-              <label htmlFor="unit">Unidad de Medida *</label>
-              <select
-                id="unit"
-                value={formData.unit}
-                onChange={(e) => handleInputChange('unit', e.target.value)}
-                className={errors.unit ? 'error' : ''}
+            <div className="form-row">
+              <div className="form-group">
+                <label htmlFor="name" className="form-label required">
+                  Nombre de la Fórmula
+                </label>
+                <input
+                  type="text"
+                  id="name"
+                  value={formData.name}
+                  onChange={(e) => handleInputChange('name', e.target.value)}
+                  className={`form-input ${errors.name ? 'error' : ''}`}
+                  placeholder="Ej: Agrocup, Fertilizante Premium..."
+                  maxLength={255}
+                  disabled={loading}
+                />
+                {errors.name && <span className="field-error">{errors.name}</span>}
+              </div>
+            </div>
+
+            <div className="form-row">
+              <div className="form-group">
+                <label htmlFor="description" className="form-label">
+                  Descripción
+                </label>
+                <textarea
+                  id="description"
+                  value={formData.description}
+                  onChange={(e) => handleInputChange('description', e.target.value)}
+                  className={`form-textarea ${errors.description ? 'error' : ''}`}
+                  placeholder="Descripción opcional del producto..."
+                  rows={3}
+                  maxLength={1000}
+                  disabled={loading}
+                />
+                <div className="char-count">
+                  {formData.description?.length || 0}/1000 caracteres
+                </div>
+                {errors.description && <span className="field-error">{errors.description}</span>}
+              </div>
+            </div>
+
+            <div className="form-row">
+              <div className="form-group">
+                <label htmlFor="unit" className="form-label required">
+                  Unidad de Medida
+                </label>
+                <select
+                  id="unit"
+                  value={formData.unit}
+                  onChange={(e) => handleInputChange('unit', e.target.value)}
+                  className={`form-select ${errors.unit ? 'error' : ''}`}
+                  disabled={loading}
+                >
+                  {PRODUCT_UNITS.map(unit => (
+                    <option key={unit} value={unit}>
+                      {unit.charAt(0).toUpperCase() + unit.slice(1)}
+                    </option>
+                  ))}
+                </select>
+                {errors.unit && <span className="field-error">{errors.unit}</span>}
+              </div>
+
+              <div className="form-group">
+                <label htmlFor="base_quantity" className="form-label required">
+                  Cantidad Base
+                </label>
+                <input
+                  type="number"
+                  id="base_quantity"
+                  value={formData.base_quantity}
+                  onChange={(e) => handleInputChange('base_quantity', parseFloat(e.target.value) || 0)}
+                  className={`form-input ${errors.base_quantity ? 'error' : ''}`}
+                  placeholder="1"
+                  min="0.001"
+                  max="999999"
+                  step="0.001"
+                  disabled={loading}
+                />
+                <div className="input-help">
+                  Cantidad que produce la fórmula (ej: 1000 litros)
+                </div>
+                {errors.base_quantity && <span className="field-error">{errors.base_quantity}</span>}
+              </div>
+            </div>
+
+            <div className="form-info">
+              <div className="info-box">
+                <h4>💡 Información sobre la cantidad base</h4>
+                <p>
+                  La cantidad base define cuántas unidades produce la fórmula del producto.
+                  Por ejemplo, si tu fórmula produce 1000 litros de Agrocup, la cantidad base sería 1000.
+                </p>
+              </div>
+            </div>
+
+            <div className="form-actions">
+              <button
+                type="button"
+                onClick={handleClose}
+                className="btn btn-secondary"
                 disabled={loading}
               >
-                {PRODUCT_UNITS.map(unit => (
-                  <option key={unit} value={unit}>
-                    {unit.charAt(0).toUpperCase() + unit.slice(1)}
-                  </option>
-                ))}
-              </select>
-              {errors.unit && <span className="field-error">{errors.unit}</span>}
-            </div>
-
-            <div className="form-group">
-              <label htmlFor="base_quantity">Cantidad Base *</label>
-              <input
-                type="number"
-                id="base_quantity"
-                value={formData.base_quantity}
-                onChange={(e) => handleInputChange('base_quantity', parseFloat(e.target.value) || 0)}
-                className={errors.base_quantity ? 'error' : ''}
-                placeholder="1"
-                min="0.001"
-                max="999999"
-                step="0.001"
+                Cancelar
+              </button>
+              <button
+                type="submit"
+                className="btn btn-primary"
                 disabled={loading}
-              />
-              <div className="input-help">
-                Cantidad que produce la fórmula (ej: 1000 litros)
-              </div>
-              {errors.base_quantity && <span className="field-error">{errors.base_quantity}</span>}
+              >
+                {loading ? (
+                  <>
+                    <span className="loading-spinner small" />
+                    {isEdit ? 'Actualizando...' : 'Creando...'}
+                  </>
+                ) : (
+                  isEdit ? 'Actualizar Fórmula' : 'Crear Fórmula'
+                )}
+              </button>
             </div>
-          </div>
-
-          <div className="form-info">
-            <div className="info-box">
-              <h4>💡 Información sobre la cantidad base</h4>
-              <p>
-                La cantidad base define cuántas unidades produce la fórmula del producto. 
-                Por ejemplo, si tu fórmula produce 1000 litros de Agrocup, la cantidad base sería 1000.
-              </p>
-            </div>
-          </div>
-
-          <div className="form-actions">
-            <button 
-              type="button" 
-              onClick={handleClose} 
-              className="cancel-button"
-              disabled={loading}
-            >
-              Cancelar
-            </button>
-            <button 
-              type="submit" 
-              className="submit-button"
-              disabled={loading}
-            >
-              {loading ? (
-                <>
-                  <div className="loading-spinner" />
-                  {isEdit ? 'Actualizando...' : 'Creando...'}
-                </>
-              ) : (
-                isEdit ? 'Actualizar Fórmula' : 'Crear Fórmula'
-              )}
-            </button>
-          </div>
-        </form>
+          </form>
+        </div>
       </div>
     </div>
   );

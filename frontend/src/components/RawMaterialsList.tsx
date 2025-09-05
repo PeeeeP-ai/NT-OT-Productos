@@ -5,6 +5,8 @@ import { useDebounce } from '../hooks/useDebounce';
 import { FaRegEdit, FaRegTrashAlt, FaPowerOff, FaPlus, FaEye } from 'react-icons/fa';
 import './RawMaterialsList.css';
 
+type ViewMode = 'cards' | 'grid';
+
 // Cache global para stocks calculados
 const stocksCache = new Map<string, { stock: number; timestamp: number }>();
 const STOCKS_CACHE_DURATION = 60000; // 1 minuto
@@ -48,6 +50,7 @@ const RawMaterialsList: React.FC<RawMaterialsListProps> = memo(({
   const [searchTerm, setSearchTerm] = useState('');
   const [calculatedStocks, setCalculatedStocks] = useState<{[key: string]: number}>({});
   const [stocksCalculated, setStocksCalculated] = useState(false);
+  const [viewMode, setViewMode] = useState<ViewMode>('cards');
   
   // Usar useRef para evitar recreaciones de callbacks
   const isCalculatingRef = useRef(false);
@@ -269,9 +272,34 @@ const RawMaterialsList: React.FC<RawMaterialsListProps> = memo(({
 
   return (
     <div className="raw-materials-list">
-      <div className="header">
-        <h1>Materias Primas</h1>
-        <div className="controls">
+      <div className="list-header">
+        <h2>📦 Materias Primas</h2>
+        <div className="header-actions">
+          <div className="view-selector">
+            <button
+              onClick={() => setViewMode('cards')}
+              className={`view-button ${viewMode === 'cards' ? 'active' : ''}`}
+              title="Vista de tarjetas"
+            >
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <rect x="3" y="3" width="7" height="7"></rect>
+                <rect x="14" y="3" width="7" height="7"></rect>
+                <rect x="14" y="14" width="7" height="7"></rect>
+                <rect x="3" y="14" width="7" height="7"></rect>
+              </svg>
+            </button>
+            <button
+              onClick={() => setViewMode('grid')}
+              className={`view-button ${viewMode === 'grid' ? 'active' : ''}`}
+              title="Vista de grilla"
+            >
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <path d="M3 6h18"></path>
+                <path d="M3 12h18"></path>
+                <path d="M3 18h18"></path>
+              </svg>
+            </button>
+          </div>
           <input
             type="text"
             placeholder="Buscar..."
@@ -290,13 +318,13 @@ const RawMaterialsList: React.FC<RawMaterialsListProps> = memo(({
         </div>
       </div>
 
-      <div className="materials-grid">
-        {filteredMaterials.length === 0 ? (
-          <div className="empty-state">
-            <p>No se encontraron materias primas</p>
-          </div>
-        ) : (
-          filteredMaterials.map(material => {
+      {filteredMaterials.length === 0 ? (
+        <div className="empty-state">
+          <p>No se encontraron materias primas</p>
+        </div>
+      ) : viewMode === 'cards' ? (
+        <div className="materials-grid">
+          {filteredMaterials.map(material => {
             const stockStatus = getStockStatus(material);
             return (
               <div key={material.id} className={`material-card ${!material.is_active ? 'inactive' : ''}`}>
@@ -408,9 +436,99 @@ const RawMaterialsList: React.FC<RawMaterialsListProps> = memo(({
                 </div>
               </div>
             );
-          })
-        )}
-      </div>
+          })}
+        </div>
+      ) : (
+        <div className="materials-table-container">
+          <div className="materials-table-wrapper">
+            <table className="materials-table">
+              <thead>
+                <tr>
+                  <th>Código</th>
+                  <th>Nombre</th>
+                  <th>Stock Actual</th>
+                  <th>Stock Mínimo</th>
+                  <th>Stock Máximo</th>
+                  <th>Estado</th>
+                  <th>Acciones</th>
+                </tr>
+              </thead>
+              <tbody>
+                {filteredMaterials.map(material => {
+                  const stockStatus = getStockStatus(material);
+                  return (
+                    <tr key={material.id} className={!material.is_active ? 'inactive' : ''}>
+                      <td className="code-cell">{material.code}</td>
+                      <td className="name-cell">{material.name}</td>
+                      <td className="stock-cell">
+                        <span className="stock-value">
+                          {stocksCalculated ? getCurrentStock(material) : '...'} {material.unit}
+                          <span className="stock-calculated-badge">
+                            {stocksCalculated ? '(calculado)' : '(calculando...)'}
+                          </span>
+                        </span>
+                      </td>
+                      <td className="min-stock-cell">{material.min_stock} {material.unit}</td>
+                      <td className="max-stock-cell">
+                        {material.max_stock ? `${material.max_stock} ${material.unit}` : '-'}
+                      </td>
+                      <td>
+                        <div className="status-cell">
+                          <span className={`badge ${stockStatus.class}`}>
+                            {stockStatus.text}
+                          </span>
+                          {!material.is_active && (
+                            <span className="badge inactive">Inactiva</span>
+                          )}
+                        </div>
+                      </td>
+                      <td className="actions-cell">
+                        <button
+                          onClick={() => onViewEntries(material)}
+                          className="action-button view-button table-action"
+                          title="Ver entradas"
+                        >
+                          👁️
+                        </button>
+                        <button
+                          onClick={() => onCreateEntry(material)}
+                          className="action-button create-button table-action"
+                          title="Nueva entrada"
+                        >
+                          ➕
+                        </button>
+                        <button
+                          onClick={() => onEdit(material)}
+                          className="action-button edit-button table-action"
+                          title="Editar"
+                        >
+                          ✏️
+                        </button>
+                        <button
+                          onClick={() => handleDisable(material)}
+                          className={`action-button ${material.is_active ? 'warning' : 'success'} table-action`}
+                          title={material.is_active ? 'Deshabilitar' : 'Habilitar'}
+                        >
+                          <FaPowerOff />
+                        </button>
+                        {showInactive && (
+                          <button
+                            onClick={() => handleDelete(material)}
+                            className="action-button delete-button table-action"
+                            title="Eliminar"
+                          >
+                            🗑️
+                          </button>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
     </div>
   );
 });

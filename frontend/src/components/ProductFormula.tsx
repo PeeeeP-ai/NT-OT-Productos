@@ -75,6 +75,25 @@ const ProductFormula: React.FC<ProductFormulaProps> = ({
     }
   }, [isOpen, product.id]);
 
+  // Scroll automático al formulario cuando se activa edición o creación
+  useEffect(() => {
+    if (editingItem || showAddForm) {
+      const formSelector = editingItem ? '.edit-form-section' : '.add-form-section';
+      const formElement = document.querySelector(formSelector) as HTMLElement;
+
+      if (formElement) {
+        // Usar timeout para asegurar que el formulario esté renderizado
+        setTimeout(() => {
+          formElement.scrollIntoView({
+            behavior: 'smooth',
+            block: 'start',
+            inline: 'nearest'
+          });
+        }, 100);
+      }
+    }
+  }, [editingItem, showAddForm]);
+
   // Manejar agregar ingrediente
   const handleAddIngredient = async (data: FormulaItemFormData) => {
     try {
@@ -198,10 +217,12 @@ const ProductFormula: React.FC<ProductFormulaProps> = ({
               </span>
             </div>
           </div>
-          <button 
+          <button
             className="modal-close-btn"
             onClick={handleClose}
             disabled={loading}
+            title="Cerrar"
+            aria-label="Cerrar"
           >
             ✕
           </button>
@@ -255,7 +276,8 @@ const ProductFormula: React.FC<ProductFormulaProps> = ({
                     availableRawMaterials={rawMaterials} // Todas las materias primas para edición
                     initialData={{
                       raw_material_id: editingItem.raw_material_id,
-                      quantity: editingItem.quantity
+                      quantity: editingItem.quantity,
+                      percentage: editingItem.percentage || 0
                     }}
                     onSubmit={handleEditIngredient}
                     onCancel={() => setEditingItem(null)}
@@ -323,18 +345,26 @@ const ProductFormula: React.FC<ProductFormulaProps> = ({
                               </h4>
                               <div className="ingredient-actions">
                                 <button
-                                  className="btn btn-icon btn-edit"
+                                  className={`btn btn-icon btn-edit ${showAddForm || !!editingItem ? 'disabled' : ''}`}
                                   onClick={() => setEditingItem(item)}
                                   disabled={showAddForm || !!editingItem}
                                   title="Editar cantidad"
+                                  style={{
+                                    pointerEvents: (showAddForm || !!editingItem) ? 'none' : 'auto',
+                                    cursor: (showAddForm || !!editingItem) ? 'not-allowed' : 'pointer'
+                                  }}
                                 >
                                   ✏️
                                 </button>
                                 <button
-                                  className="btn btn-icon btn-delete"
+                                  className={`btn btn-icon btn-delete ${showAddForm || !!editingItem ? 'disabled' : ''}`}
                                   onClick={() => handleDeleteIngredient(item.raw_material_id)}
                                   disabled={showAddForm || !!editingItem}
                                   title="Eliminar ingrediente"
+                                  style={{
+                                    pointerEvents: (showAddForm || !!editingItem) ? 'none' : 'auto',
+                                    cursor: (showAddForm || !!editingItem) ? 'not-allowed' : 'pointer'
+                                  }}
                                 >
                                   🗑️
                                 </button>

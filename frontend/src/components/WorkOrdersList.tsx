@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback, useMemo, memo } from 'react';
+import jsPDF from 'jspdf';
 import { WorkOrder } from '../types';
-import { getWorkOrders, getStatusColor, getPriorityColor, formatWorkOrderNumber } from '../services/workOrdersService';
+import { getWorkOrders, getActiveWorkOrdersSortedByStartDate, getWorkOrderDetails, getStatusColor, getPriorityColor, formatWorkOrderNumber } from '../services/workOrdersService';
 import './WorkOrdersList.css';
 
 type ViewMode = 'cards' | 'grid';
@@ -274,6 +275,271 @@ const WorkOrdersList: React.FC<WorkOrdersListProps> = memo(({
     });
   }, [workOrders, sortField, sortDirection]);
 
+  const generateWorkOrdersReportPDF = useCallback(async () => {
+    // Función para formatear números
+    const formatNumber = (num: number) => {
+      return new Intl.NumberFormat('es-ES', {
+        minimumFractionDigits: 2,
+        maximumFractionDigits: 2,
+        useGrouping: true, // Habilitar separador de miles
+        minimumIntegerDigits: 1
+      }).format(num);
+    };
+  
+    try {
+      // Obtener todas las OT pendientes y en progreso ordenadas por fecha
+      const response = await getActiveWorkOrdersSortedByStartDate();
+  
+      if (!response.success || !response.data) {
+        alert('Error al obtener órdenes de trabajo para el reporte: ' + response.message);
+        return;
+      }
+  
+      const workOrders = response.data;
+  
+      // Obtener detalles completos de cada OT para mostrar productos y materiales
+      const workOrdersWithDetails = [];
+      for (const workOrder of workOrders) {
+        try {
+          const detailsResponse = await getWorkOrderDetails(workOrder.id);
+          if (detailsResponse.success && detailsResponse.data) {
+            workOrdersWithDetails.push({
+              ...workOrder,
+              details: detailsResponse.data
+            });
+          } else {
+            // Si no se puede obtener detalles, añadir sin detalles
+            workOrdersWithDetails.push({
+              ...workOrder,
+              details: null
+            });
+          }
+        } catch (error) {
+          console.warn(`Error obteniendo detalles de OT ${workOrder.order_number}:`, error);
+          workOrdersWithDetails.push({
+            ...workOrder,
+            details: null
+          });
+        }
+      }
+  
+      const pdf = new jsPDF({ orientation: 'landscape' });
+      const pageWidth = pdf.internal.pageSize.getWidth();
+      const pageHeight = pdf.internal.pageSize.getHeight();
+      const margin = 15;
+      let yPos = margin + 30; // Inicia después del header
+
+      // Agregar logo
+      try {
+        pdf.addImage('/img/logont.png', 'PNG', 20, 20, 30, 15);
+      } catch (error) {
+        pdf.setFillColor(63, 81, 181);
+        pdf.rect(20, 20, 30, 15, 'F');
+        pdf.setFont('helvetica', 'bold');
+        pdf.setFontSize(10);
+        pdf.setTextColor(255, 255, 255);
+        pdf.text('LOGO', 35, 30, { align: 'center' });
+      }
+      pdf.setTextColor(0, 0, 0);
+
+      // Título principal
+      pdf.setFontSize(18);
+      pdf.setFont('helvetica', 'bold');
+      pdf.text('REPORTE DE ÓRDENES DE TRABAJO', pageWidth / 2, margin + 15, { align: 'center' });
+
+      // Fecha del reporte
+      pdf.setFontSize(10);
+      pdf.setFont('helvetica', 'normal');
+      const fechaGeneracion = new Date().toLocaleDateString('es-ES') + ' ' + new Date().toLocaleTimeString('es-ES');
+      pdf.text(`Generado: ${fechaGeneracion}`, pageWidth - margin, margin + 15, { align: 'right' });
+
+      // Información resumen
+      pdf.setFont('helvetica', 'bold');
+      pdf.text(`Total de OT pendientes/en proceso: ${workOrders.length}`, margin, yPos);
+
+      if (workOrders.length === 0) {
+        pdf.setFont('helvetica', 'normal');
+        pdf.setFontSize(14);
+        pdf.text('No hay órdenes de trabajo pendientes o en proceso', pageWidth / 2, yPos + 30, { align: 'center' });
+      } else {
+        // Encabezados de la grilla
+        yPos += 20;
+        const headers = ['N° OT', 'Estado', 'Prioridad', 'Descripción', 'Producto', 'Cantidad', 'Materias Primas', 'Inicio Planificado', 'Fin Planificado'];
+        const columnWidths = [18, 20, 18, 35, 30, 20, 55, 30, 30];
+        const startX = margin;
+
+        pdf.setFillColor(240, 240, 240);
+        pdf.rect(startX, yPos, pageWidth - 2 * margin, 10, 'F');
+
+        pdf.setFontSize(8);
+        pdf.setFont('helvetica', 'bold');
+        pdf.setTextColor(0, 0, 0);
+
+        let xPos = startX + 3;
+        headers.forEach((header, index) => {
+          const maxWidth = columnWidths[index] - 2; // Margen interno para texto
+          const text = pdf.splitTextToSize(header, maxWidth);
+          pdf.text(text[0] || header, xPos, yPos + 6, { maxWidth: maxWidth });
+          xPos += columnWidths[index];
+        });
+
+        // Líneas de la grilla
+        yPos += 12;
+        pdf.setFontSize(6); // Tamaño más compacto para que quepa todo
+        pdf.setFont('helvetica', 'normal');
+
+        workOrdersWithDetails.forEach((workOrder) => {
+          // Calcula la altura necesaria para esta fila
+          let rowHeight = 15; // Altura mínima
+
+          if (workOrder.details && (workOrder.details as any).items) {
+            let maxMaterials = 0;
+            (workOrder.details as any).items.forEach((item: any) => {
+              if (item.formula && item.formula.length > 0) {
+                maxMaterials = Math.max(maxMaterials, item.formula.length);
+              }
+            });
+            // Altura = altura base + (número de líneas de materiales - 1) * altura por línea
+            rowHeight = Math.max(rowHeight, 12 + (maxMaterials - 1) * 5);
+          }
+
+          // Verificar si necesitamos nueva página considerando la altura variable
+          if (yPos + rowHeight > pageHeight - margin) {
+            pdf.addPage('landscape');
+            yPos = margin;
+
+            // Repetir headers en nueva página
+            pdf.setFillColor(240, 240, 240);
+            pdf.rect(startX, yPos, pageWidth - 2 * margin, 10, 'F');
+
+            pdf.setFont('helvetica', 'bold');
+            pdf.setFontSize(8);
+            xPos = startX + 3;
+            headers.forEach((header, headerIndex) => {
+              const maxWidth = columnWidths[headerIndex] - 2; // Margen interno para texto
+              const text = pdf.splitTextToSize(header, maxWidth);
+              pdf.text(text[0] || header, xPos, yPos + 6, { maxWidth: maxWidth });
+              xPos += columnWidths[headerIndex];
+            });
+
+            yPos += 12;
+            pdf.setFontSize(7);
+            pdf.setFont('helvetica', 'normal');
+          }
+
+          // Dibujar fila
+          xPos = startX;
+          pdf.rect(xPos, yPos, pageWidth - 2 * margin, rowHeight);
+
+          // Líneas verticales para columnas
+          columnWidths.slice(0, -1).forEach((width) => {
+            xPos += width;
+            pdf.line(xPos, yPos, xPos, yPos + rowHeight);
+          });
+
+          // Preparar información de productos y materiales
+          let productoText = '-';
+          let cantidadText = '-';
+          let todasLasMateriasPrimas: string[] = [];
+
+          if (workOrder.details && (workOrder.details as any).items && (workOrder.details as any).items.length > 0) {
+            // Recopilar productos
+            const productos = (workOrder.details as any).items.map((item: any) => item.product_name || 'Sin nombre');
+            productoText = productos.join(', ');
+
+            // Recopilar cantidades
+            const cantidades = (workOrder.details as any).items.map((item: any) =>
+              `${formatNumber(item.planned_quantity || 0)} ${item.product_unit || ''}`
+            );
+            cantidadText = cantidades.join(', ');
+
+            // Recopilar TODAS las materias primas (sin límite)
+            (workOrder.details as any).items.forEach((item: any) => {
+              if (item.formula && item.formula.length > 0) {
+                item.formula.forEach((material: any) => {
+                  const requiredQuantity = material.consumption_planned || material.quantity || 0;
+                  if (requiredQuantity > 0) {
+                    todasLasMateriasPrimas.push(`${material.raw_material_name}: ${formatNumber(requiredQuantity)} ${material.raw_material_unit}`);
+                  }
+                });
+              }
+            });
+          }
+
+          // Dibujar fila con altura variable
+          xPos = startX;
+          pdf.rect(xPos, yPos, pageWidth - 2 * margin, rowHeight);
+
+          // Líneas verticales para columnas
+          columnWidths.slice(0, -1).forEach((width) => {
+            xPos += width;
+            pdf.line(xPos, yPos, xPos, yPos + rowHeight);
+          });
+
+          // Datos de la fila
+          xPos = startX + 3;
+          const rowData = [
+            formatWorkOrderNumber(workOrder.order_number),
+            getStatusLabel(workOrder.status),
+            getPriorityLabel(workOrder.priority),
+            workOrder.description || '-',
+            productoText,
+            cantidadText,
+            '', // Espacio vacío para la columna de Materias Primas - lo dibujamos manualmente
+            formatDate(workOrder.planned_start_date),
+            formatDate(workOrder.planned_end_date)
+          ];
+
+          // Dibujar cada columna
+          rowData.forEach((data, colIndex) => {
+            const maxWidth = columnWidths[colIndex] - 6; // Margen interno
+
+            if (colIndex === 6) { // Columna de Materias Primas
+              // Dibujar cada materia prima en una línea separada
+              let materialYPos = yPos + 5;
+              todasLasMateriasPrimas.forEach((material) => {
+                if (materialYPos - yPos < rowHeight - 4) { // Asegurar que quepa en la fila
+                  const materialParts = pdf.splitTextToSize(material, maxWidth);
+                  pdf.text(materialParts[0] || material, xPos, materialYPos, { maxWidth: maxWidth });
+                  materialYPos += 4.5; // Espacio entre líneas
+                }
+              });
+              if (todasLasMateriasPrimas.length === 0) {
+                pdf.text('-', xPos, yPos + 6, { maxWidth: maxWidth });
+              }
+            } else {
+              // Para otras columnas
+              const text = pdf.splitTextToSize(data, maxWidth);
+              pdf.text(text[0] || '-', xPos, yPos + 6, { maxWidth: maxWidth });
+            }
+
+            xPos += columnWidths[colIndex];
+          });
+
+          yPos += rowHeight;
+
+          // Línea horizontal entre filas
+          pdf.line(startX, yPos, pageWidth - margin, yPos);
+        });
+      }
+
+      // Footer común
+      pdf.setFontSize(8);
+      pdf.setFont('helvetica', 'italic');
+      pdf.text(`Total de registros: ${workOrders.length}`, margin, pageHeight - 10);
+
+      // Guardar PDF
+      const fileName = `Reporte_OT_${new Date().toISOString().split('T')[0]}.pdf`;
+      pdf.save(fileName);
+
+      alert('Reporte de órdenes de trabajo generado exitosamente');
+
+    } catch (error) {
+      console.error('Error generando reporte PDF:', error);
+      alert('Error al generar el reporte PDF: ' + (error instanceof Error ? error.message : 'Error desconocido'));
+    }
+  }, [formatDate, getStatusLabel, getPriorityLabel]);
+
   if (loading) {
     return (
       <div className="work-orders-list">
@@ -336,6 +602,9 @@ const WorkOrdersList: React.FC<WorkOrdersListProps> = memo(({
             <option value="completed">Completadas</option>
             <option value="cancelled">Canceladas</option>
           </select>
+          <button onClick={generateWorkOrdersReportPDF} className="print-button" title="Generar reporte PDF de OT pendientes/en proceso">
+            🖨️ Imprimir Reporte
+          </button>
           {onCreate && (
             <button onClick={onCreate} className="create-button">
               ➕ Nueva OT

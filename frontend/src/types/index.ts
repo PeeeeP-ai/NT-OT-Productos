@@ -19,6 +19,7 @@ export interface InventoryEntry {
   raw_material_id: string;
   quantity: number;
   entry_type: 'in' | 'out';
+  unit_price?: number;
   movement_date: string;
   notes?: string;
   user_id?: string;
@@ -40,6 +41,7 @@ export interface RawMaterialFormData {
 export interface InventoryEntryFormData {
   quantity: number;
   entry_type: 'in' | 'out';
+  unit_price?: number;
   movement_date?: string;
   notes?: string;
 }
@@ -82,6 +84,7 @@ export interface ProductFormula {
   raw_material_unit?: string; // Unidad de la materia prima
   raw_material_current_stock?: number; // Stock actual de la materia prima
   quantity: number;
+  percentage?: number; // Porcentaje del material en el producto final
   created_at: string;
   raw_material?: RawMaterial; // Para joins con información de materia prima
 }
@@ -101,6 +104,7 @@ export interface ProductFormData {
 export interface FormulaItemFormData {
   raw_material_id: string;
   quantity: number;
+  percentage: number; // Porcentaje del material en relación al producto final
 }
 
 // Tipos extendidos para cálculos y visualización
@@ -150,6 +154,7 @@ export interface ProductValidationErrors {
 export interface FormulaItemValidationErrors {
   raw_material_id?: string;
   quantity?: string;
+  percentage?: string;
   general?: string;
 }
 
@@ -278,5 +283,66 @@ export interface WorkOrderValidationErrors {
 export interface WorkOrderItemValidationErrors {
   product_id?: string;
   planned_quantity?: string;
+  general?: string;
+}
+
+// =========================================
+// TIPOS PARA ANÁLISIS DE PRODUCTOS
+// =========================================
+
+export interface ProductAnalysis {
+  id: string;
+  work_order_id: string;
+  analysis_number: string; // 6 dígitos aleatorios
+  analysis_type: 'chemical' | 'physical' | 'microbiological' | 'organoleptic' | 'general';
+  file_path?: string;
+  file_name?: string;
+  analysis_date: string;
+  notes?: string;
+  description?: string; // Descripción opcional del análisis
+  created_by?: string;
+  created_at: string;
+  updated_at: string;
+  // Para joins
+  work_order?: Partial<WorkOrder>;
+}
+
+export interface ProductAnalysisFormData {
+  analysis_type: ProductAnalysis['analysis_type'];
+  file?: File;
+  analysis_date?: string;
+  notes?: string;
+  description?: string;
+}
+
+export interface ProductAnalysisWithDetails extends ProductAnalysis {
+  work_order_number: string;
+  product_name: string;
+  product_unit: string;
+}
+
+// Tipos para respuestas específicas de API de análisis
+export interface ProductAnalysisApiResponse extends ApiResponse<ProductAnalysis> {}
+export interface ProductAnalysesApiResponse extends ApiResponse<ProductAnalysis[]> {}
+export interface ProductAnalysisWithDetailsApiResponse extends ApiResponse<ProductAnalysisWithDetails> {}
+
+// Enums y constantes para análisis
+export const ANALYSIS_TYPES = [
+  { value: 'chemical', label: 'Químico', color: '#4caf50' },
+  { value: 'physical', label: 'Físico', color: '#2196f3' },
+  { value: 'microbiological', label: 'Microbiológico', color: '#ff9800' },
+  { value: 'organoleptic', label: 'Organoléptico', color: '#9c27b0' },
+  { value: 'general', label: 'General', color: '#607d8b' }
+] as const;
+
+export type AnalysisType = typeof ANALYSIS_TYPES[number]['value'];
+
+// Tipos para validación de análisis
+export interface ProductAnalysisValidationErrors {
+  work_order_item_id?: string;
+  analysis_type?: string;
+  file?: string;
+  analysis_date?: string;
+  notes?: string;
   general?: string;
 }

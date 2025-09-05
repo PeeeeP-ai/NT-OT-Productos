@@ -8,11 +8,13 @@ import ProductDetails from './components/ProductDetails';
 import WorkOrdersList from './components/WorkOrdersList';
 import WorkOrderForm from './components/WorkOrderForm';
 import WorkOrderDetails from './components/WorkOrderDetails';
+import WorkOrderAnalyses from './components/WorkOrderAnalyses';
+import AnalysesList from './components/AnalysesList';
 import { Product, WorkOrder } from './types';
 import { deleteWorkOrder } from './services/workOrdersService';
 import './App.css';
 
-type AppSection = 'materials' | 'products' | 'workorders';
+type AppSection = 'materials' | 'products' | 'workorders' | 'analyses';
 
 function App() {
   // Estado de navegación
@@ -37,7 +39,12 @@ function App() {
   const [showWorkOrderForm, setShowWorkOrderForm] = useState(false);
   const [viewingWorkOrder, setViewingWorkOrder] = useState<WorkOrder | null>(null);
   const [editingWorkOrder, setEditingWorkOrder] = useState<WorkOrder | null>(null);
+  const [showWorkOrderAnalyses, setShowWorkOrderAnalyses] = useState(false);
+  const [analysingWorkOrder, setAnalysingWorkOrder] = useState<WorkOrder | null>(null);
   const [forceRefreshWorkOrders, setForceRefreshWorkOrders] = useState(0);
+
+  // Estados para análisis
+  const [forceRefreshAnalyses] = useState(0);
 
   // =========================================
   // HANDLERS PARA MATERIAS PRIMAS
@@ -149,6 +156,16 @@ function App() {
     // TODO: Implementar vista de detalles cuando esté lista
   };
 
+  const handleViewWorkOrderAnalyses = (workOrder: WorkOrder) => {
+    setAnalysingWorkOrder(workOrder);
+    setShowWorkOrderAnalyses(true);
+  };
+
+  const handleCloseWorkOrderAnalyses = () => {
+    setShowWorkOrderAnalyses(false);
+    setAnalysingWorkOrder(null);
+  };
+
   const handleEditWorkOrder = (workOrder: WorkOrder) => {
     setEditingWorkOrder(workOrder);
     setShowWorkOrderForm(true);
@@ -194,27 +211,39 @@ function App() {
       <header className="app-header">
         <div className="header-content">
           <div className="header-left">
-            <h1>Sistema de Gestión</h1>
-            <nav className="main-navigation">
-              <button
-                className={`nav-button ${currentSection === 'materials' ? 'active' : ''}`}
-                onClick={() => setCurrentSection('materials')}
-              >
-                📦 Materias Primas
-              </button>
-              <button
-                className={`nav-button ${currentSection === 'products' ? 'active' : ''}`}
-                onClick={() => setCurrentSection('products')}
-              >
-                🧪 Fórmulas
-              </button>
-              <button
-                className={`nav-button ${currentSection === 'workorders' ? 'active' : ''}`}
-                onClick={() => setCurrentSection('workorders')}
-              >
-                📋 Órdenes de Trabajo
-              </button>
-            </nav>
+            {/* Logo */}
+            <div className="app-logo">
+              <img src="/img/logont.png" alt="Logo Empresa" className="logo-image" />
+            </div>
+            <div className="header-title-nav">
+              <h1>Sistema de Gestión</h1>
+              <nav className="main-navigation">
+                <button
+                  className={`nav-button ${currentSection === 'materials' ? 'active' : ''}`}
+                  onClick={() => setCurrentSection('materials')}
+                >
+                  📦 Materias Primas
+                </button>
+                <button
+                  className={`nav-button ${currentSection === 'products' ? 'active' : ''}`}
+                  onClick={() => setCurrentSection('products')}
+                >
+                  🧪 Fórmulas
+                </button>
+                <button
+                  className={`nav-button ${currentSection === 'workorders' ? 'active' : ''}`}
+                  onClick={() => setCurrentSection('workorders')}
+                >
+                  📋 Órdenes de Trabajo
+                </button>
+                <button
+                  className={`nav-button ${currentSection === 'analyses' ? 'active' : ''}`}
+                  onClick={() => setCurrentSection('analyses')}
+                >
+                  🔬 Análisis
+                </button>
+              </nav>
+            </div>
           </div>
           <div className="header-right">
             {currentSection === 'materials' && (
@@ -263,6 +292,12 @@ function App() {
             onEdit={handleEditWorkOrder}
             onDelete={handleDeleteWorkOrder}
             forceRefresh={forceRefreshWorkOrders}
+          />
+        )}
+
+        {currentSection === 'analyses' && (
+          <AnalysesList
+            forceRefresh={forceRefreshAnalyses}
           />
         )}
       </main>
@@ -321,6 +356,16 @@ function App() {
           isOpen={!!viewingWorkOrder}
           onClose={() => setViewingWorkOrder(null)}
           onUpdate={refreshWorkOrdersList}
+          onViewAnalyses={handleViewWorkOrderAnalyses}
+        />
+      )}
+
+      {/* Modal de Análisis de Orden de Trabajo */}
+      {showWorkOrderAnalyses && analysingWorkOrder && (
+        <WorkOrderAnalyses
+          workOrder={analysingWorkOrder}
+          isOpen={showWorkOrderAnalyses}
+          onClose={handleCloseWorkOrderAnalyses}
         />
       )}
     </div>
